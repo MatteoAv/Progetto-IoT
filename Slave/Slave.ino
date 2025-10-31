@@ -21,44 +21,61 @@ Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 #define RST_PIN 10
 MFRC522 mfrc522(SS_PIN, RST_PIN);
 
-String lastData = "";       // ultimo dato da inviare
-volatile bool dataReady = false; // segnala al master che c'è un dato nuovo
+String lastData = "";
+volatile bool dataReady = false;
+
+bool cardPresente = false;
+String currentID = "";
 
 void setup() {
-  Wire.begin(8);              // slave I2C
-  Wire.onRequest(sendData);   // invio dati quando richiesto
+  Wire.begin(8);              
+  Wire.onRequest(sendData);   
   SPI.begin();
   mfrc522.PCD_Init();
+  Serial.begin(9600);
 }
 
 void loop() {
-  // Lettura tastierino
+  // --- Lettura tastierino ---
   char key = keypad.getKey();
   if (key && !dataReady) {
-    lastData = "K:" + String(key) + "\n"; // prefisso K: per tasto
+    lastData = "K:" + String(key) + "\n";
     dataReady = true;
+    Serial.println("Tasto: " + String(key));
   }
 
-  // Lettura RFID
-  if (mfrc522.PICC_IsNewCardPresent() && mfrc522.PICC_ReadCardSerial() && !dataReady) {
+  // --- Lettura RFID ---
+  if (mfrc522.PICC_IsNewCardPresent() && mfrc522.PICC_ReadCardSerial()) {
     String cardID = "";
-    for (byte i=0; i<mfrc522.uid.size; i++) {
-      if (mfrc522.uid.uidByte[i]<0x10) cardID += "0";
+    for (byte i = 0; i < mfrc522.uid.size; i++) {
+      if (mfrc522.uid.uidByte[i] < 0x10) cardID += "0";
       cardID += String(mfrc522.uid.uidByte[i], HEX);
     }
     cardID.toUpperCase();
-    lastData = "C:" + cardID + "\n"; // prefisso C: per card
-    dataReady = true;
-  }
 
-  // loop vuoto: invio dati avviene solo tramite onRequest()
+    if (!cardPresente || cardID != currentID) {
+      lastData = "C:" + cardID + "\n";
+      dataReady = true;
+      cardPresente = true;
+      currentID = cardID;
+      Serial.println("Carta letta: " + cardID);
+    }
+  } else if (cardPresente && !mfrc522.PICC_IsNewCardPresent()) {
+    // Carta rimossa
+    if (!dataReady) {
+      lastData = "C:REMOVED\n";
+      dataReady = true;
+      cardPresente = false;
+      currentID = "";
+      Serial.println("Carta rimossa");
+    }
+  }
 }
 
 void sendData() {
   if (dataReady && lastData.length() > 0) {
     Wire.write(lastData.c_str(), lastData.length());
+    dataReady = false;
     lastData = "";
-    dataReady = false; // reset flag dopo invio
   }
-  // se non c'è dato, non inviare nulla
 }
