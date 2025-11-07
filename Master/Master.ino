@@ -4,15 +4,13 @@
 #define LED_VERDE_PIN 8
 #define LED_ROSSO_PIN 9
 #define PREFIX_PIN "PIN_INSERITO:" // Prefisso per l'invio del PIN a Python
+#define PREFIX_CARD "CARD_ID:"     // Prefisso per l'invio dell'ID carta a Python
 
 LiquidCrystal mylcd(12, 11, 5, 4, 3, 2);
 
 String pinInserito = "";
-String currentCard = "";
-String lastCardID = "";    
+String lastCardID = "";
 bool cartaPresente = false;
-
-const String ID_AUTORIZZATO = "E27AEB1B"; 
 
 enum Stato { ATTESA, INSERIMENTO_PIN, ACCESSO_CONCESSO, ACCESSO_NEGATO };
 Stato stato = ATTESA;
@@ -35,9 +33,9 @@ void display_AccessoConcesso() {
     digitalWrite(LED_ROSSO_PIN, LOW);
     mylcd.clear();
     mylcd.setCursor(0, 0);
-    mylcd.print("Benvenuto");
+    mylcd.print("Accesso");
     mylcd.setCursor(0, 1);
-    mylcd.print("Accesso Concesso");
+    mylcd.print("Consentito");
 }
 
 void display_AccessoNegato() {
@@ -45,18 +43,18 @@ void display_AccessoNegato() {
     digitalWrite(LED_ROSSO_PIN, HIGH);
     mylcd.clear();
     mylcd.setCursor(0, 0);
-    mylcd.print("PIN Errato/Negato");
+    mylcd.print("Accesso");
     mylcd.setCursor(0, 1);
-    mylcd.print("Accesso Negato");
+    mylcd.print("Negato");
 }
 
 // --- Setup ---
 
 void setup() {
-    Wire.begin();             
+    Wire.begin();
     mylcd.begin(16, 2);
     Serial.begin(9600); // Inizializzazione Seriale per comunicazione con Python
-    
+
     pinMode(LED_VERDE_PIN, OUTPUT);
     pinMode(LED_ROSSO_PIN, OUTPUT);
 
@@ -71,15 +69,25 @@ void loop() {
     // 1. GESTIONE RICEZIONE COMANDI DA PYTHON (Seriale)
     if (Serial.available() > 0) {
         String comando = Serial.readStringUntil('\n');
+        comando.trim();
 
-        if (comando.startsWith("ACCESSO_CONCESSO")) {
+        if (comando.startsWith("ACCESSO_CONCESSO")) {// Pin valido
             stato = ACCESSO_CONCESSO;
             display_AccessoConcesso();
-            // NON STAMPARE QUI! Altrimenti Python riceve un nuovo dato e si confonde.
-        } else if (comando.startsWith("ACCESSO_NEGATO")) {
+        } else if (comando.startsWith("ACCESSO_NEGATO") || comando.startsWith("CARTA_NON_VALIDA")) { //Pin errato a carta non registrata
             stato = ACCESSO_NEGATO;
             display_AccessoNegato();
-            // NON STAMPARE QUI!
+        } else if (comando.startsWith("CARTA_VALIDA")) { //Carta registrata
+            // Carta valida: procedi con l'inserimento del PIN
+            digitalWrite(LED_VERDE_PIN, HIGH);
+            digitalWrite(LED_ROSSO_PIN, LOW);
+            stato = INSERIMENTO_PIN;
+            pinInserito = "";
+            mylcd.clear();
+            mylcd.setCursor(0, 0);
+            mylcd.print("Inserisci PIN:");
+            mylcd.setCursor(0, 1);
+            mylcd.print("                ");
         }
     }
 
@@ -109,27 +117,12 @@ void loop() {
                         display_Attesa();
                         pinInserito = "";
                     } else if (cardID != lastCardID) {
-                        // Nuova carta inserita
+                        // Nuova carta inserita - invia al server per verifica
                         lastCardID = cardID;
                         cartaPresente = true;
 
-                        if (cardID == ID_AUTORIZZATO) {
-                            // Carta autorizzata: richiedi PIN
-                            digitalWrite(LED_VERDE_PIN, HIGH);
-                            digitalWrite(LED_ROSSO_PIN, LOW);
-
-                            stato = INSERIMENTO_PIN;
-                            pinInserito = "";
-                            mylcd.clear();
-                            mylcd.setCursor(0, 0);
-                            mylcd.print("Inserisci PIN:");
-                            mylcd.setCursor(0, 1);
-                            mylcd.print("                ");
-                        } else {
-                            // Carta NON autorizzata: accesso negato
-                            stato = ACCESSO_NEGATO;
-                            display_AccessoNegato();
-                        }
+                        // Invia l'ID della carta al server
+                        Serial.println(PREFIX_CARD + cardID);
                     }
                 }
 
