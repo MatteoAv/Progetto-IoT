@@ -61,6 +61,23 @@ void display_InserimentoPIN() {
     mylcd.print(" A=OK B=Canc");
 }
 
+void display_PINErrato() {
+    digitalWrite(LED_VERDE_PIN, LOW);
+    digitalWrite(LED_ROSSO_PIN, HIGH);
+    mylcd.clear();
+    mylcd.setCursor(0, 0);
+    mylcd.print("PIN ERRATO");
+    mylcd.setCursor(0, 1);
+    mylcd.print("Riprova...");
+    delay(1000); // Aspetta 2 secondi
+    // Torna all'inserimento PIN
+    digitalWrite(LED_VERDE_PIN, HIGH);
+    digitalWrite(LED_ROSSO_PIN, LOW);
+    stato = INSERIMENTO_PIN;
+    pinInserito = "";
+    display_InserimentoPIN();
+}
+
 // --- Setup ---
 
 void setup() {
@@ -87,7 +104,10 @@ void loop() {
         if (comando.startsWith("ACCESSO_CONCESSO")) {// Pin valido
             stato = ACCESSO_CONCESSO;
             display_AccessoConcesso();
-        } else if (comando.startsWith("ACCESSO_NEGATO") || comando.startsWith("CARTA_NON_VALIDA")) { //Pin errato a carta non registrata
+        } else if (comando.startsWith("ACCESSO_NEGATO")) { // Pin errato ma carta valida
+            // Mostra errore PIN e torna all'inserimento
+            display_PINErrato();
+        } else if (comando.startsWith("CARTA_NON_VALIDA")) { // Carta non registrata
             stato = ACCESSO_NEGATO;
             display_AccessoNegato();
         } else if (comando.startsWith("CARTA_VALIDA")) { //Carta registrata
