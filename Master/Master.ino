@@ -48,6 +48,19 @@ void display_AccessoNegato() {
     mylcd.print("Negato");
 }
 
+void display_InserimentoPIN() {
+    mylcd.clear();
+    mylcd.setCursor(0, 0);
+    mylcd.print("Inserisci PIN:");
+    mylcd.setCursor(0, 1);
+    mylcd.print(pinInserito);
+    // Aggiungi indicazioni per l'utente
+    for (int i = pinInserito.length(); i < 4; i++) {
+        mylcd.print("_");
+    }
+    mylcd.print(" A=OK B=Canc");
+}
+
 // --- Setup ---
 
 void setup() {
@@ -83,11 +96,7 @@ void loop() {
             digitalWrite(LED_ROSSO_PIN, LOW);
             stato = INSERIMENTO_PIN;
             pinInserito = "";
-            mylcd.clear();
-            mylcd.setCursor(0, 0);
-            mylcd.print("Inserisci PIN:");
-            mylcd.setCursor(0, 1);
-            mylcd.print("                ");
+            display_InserimentoPIN();
         }
     }
 
@@ -132,13 +141,33 @@ void loop() {
 
                     if (stato == INSERIMENTO_PIN && cartaPresente) {
                         if (key >= '0' && key <= '9') {
-                            pinInserito += key;
-                            mylcd.setCursor(0, 1);
-                            mylcd.print(pinInserito);
-
+                            // Inserimento numeri (solo se non abbiamo già 4 cifre)
+                            if (pinInserito.length() < 4) {
+                                pinInserito += key;
+                                display_InserimentoPIN();
+                            }
+                        }
+                        else if (key == 'A') {
+                            // Tasto A: Conferma PIN
                             if (pinInserito.length() == 4) {
                                 // PIN COMPLETO: Invio a Python con prefisso
                                 Serial.println(PREFIX_PIN + pinInserito);
+                            } else {
+                                // PIN non completo, puoi mostrare un messaggio di errore
+                                mylcd.clear();
+                                mylcd.setCursor(0, 0);
+                                mylcd.print("PIN troppo corto");
+                                mylcd.setCursor(0, 1);
+                                mylcd.print("Inserire 4 cifre");
+                                delay(2000);
+                                display_InserimentoPIN();
+                            }
+                        }
+                        else if (key == 'B') {
+                            // Tasto B: Cancella ultimo carattere
+                            if (pinInserito.length() > 0) {
+                                pinInserito.remove(pinInserito.length() - 1);
+                                display_InserimentoPIN();
                             }
                         }
                     }
