@@ -1,6 +1,6 @@
 #include <Wire.h>
 #include <LiquidCrystal.h>
-//
+
 #define LED_VERDE_PIN 8
 #define LED_ROSSO_PIN 9
 #define PREFIX_PIN "PIN_INSERITO:" // Prefisso per l'invio del PIN a Python
