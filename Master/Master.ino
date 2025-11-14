@@ -59,7 +59,7 @@ void display_InserimentoPIN() {
     mylcd.setCursor(0, 1);
     mylcd.print(pinInserito);
     // Aggiungi underscore per cifre mancanti
-    for (int i = pinInserito.length(); i < 4; i++) {
+    for (int i = pinInserito.length(); i < 6; i++) {
         mylcd.print("_");
     }
     mylcd.print(" A=OK B=Canc");
@@ -170,19 +170,19 @@ void loop() {
 
                     if (stato == INSERIMENTO_PIN && cartaPresente) {
                         if (key >= '0' && key <= '9') {
-                            if (pinInserito.length() < 4) {
+                            if (pinInserito.length() < 6) {
                                 pinInserito += key;
                                 display_InserimentoPIN();
                             }
                         } else if (key == 'A') {
-                            if (pinInserito.length() == 4) {
+                            if (pinInserito.length() == 6) {
                                 Serial.println(PREFIX_PIN + pinInserito);
                             } else {
                                 mylcd.clear();
                                 mylcd.setCursor(0, 0);
                                 mylcd.print("PIN troppo corto");
                                 mylcd.setCursor(0, 1);
-                                mylcd.print("Inserire 4 cifre");
+                                mylcd.print("Inserire 6 cifre");
                                 delay(2000);
                                 display_InserimentoPIN();
                             }
