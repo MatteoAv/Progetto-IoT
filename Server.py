@@ -61,12 +61,14 @@ while True:
 
             if utente_corrente:
                 if pin_inserito == utente_corrente["pin"]:
-                    comando_risposta = "ACCESSO_CONCESSO\n"
-                    print("Status: Accesso Consentito. Invio il comando ad Arduino.")
+                    # Usa i dati dal db per salutare l'utente
+                    nome = utente_corrente.get("nome", "")
+                    cognome = utente_corrente.get("cognome", "")
+                    comando_risposta = f"BENVENUTO {nome} {cognome}\n"
+                    print(f"Status: Accesso Consentito. Messaggio inviato ad Arduino: {comando_risposta.strip()}")
                 else:
                     comando_risposta = "ACCESSO_NEGATO\n"
                     print("Status: PIN Errato. Invio il comando di Negazione ad Arduino.")
-
             else:
                 comando_risposta = "ACCESSO_NEGATO\n"
                 print("Status: Nessuna carta valida letta prima del PIN.")
