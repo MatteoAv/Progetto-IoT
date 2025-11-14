@@ -7,7 +7,6 @@ from pymongo.mongo_client import MongoClient
 
 load_dotenv()
 port = os.getenv('SERIAL_PORT')
-SERIAL_PORT = os.getenv("SERIAL_PORT")
 DB_USERNAME = os.getenv("DB_USERNAME")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
 DB_CLUSTER = os.getenv("DB_CLUSTER")
@@ -45,11 +44,11 @@ while True:
             utente_corrente = collection.find_one({"card_id": card_id})
 
             if utente_corrente:
-                comando_risposta = "CARTA_VALIDA\n"
-                print("Status: Carta Valida. Invio comando per richiedere PIN.")
+                comando_risposta = f"CARTA_VALIDA:{utente_corrente['nome']}\n"
+                print(f"Status: Carta Valida. Utente: {utente_corrente['nome']}. Invio comando per richiedere PIN.")
             else:
                 comando_risposta = "CARTA_NON_VALIDA\n"
-                utente_corrente = None  # nessun utente valido
+                utente_corrente = None
                 print("Status: Carta Non Valida. Accesso negato.")
 
             master.write(comando_risposta.encode('utf-8'))
@@ -61,14 +60,13 @@ while True:
 
             if utente_corrente:
                 if pin_inserito == utente_corrente["pin"]:
-                    comando_risposta = "ACCESSO_CONCESSO\n"
-                    print("Status: Accesso Consentito. Invio il comando ad Arduino.")
+                    comando_risposta = f"ACCESSO_CONCESSO:{utente_corrente['nome']}\n"
+                    print(f"Status: Accesso Consentito per {utente_corrente['nome']}. Invio il comando ad Arduino.")
                 else:
-                    comando_risposta = "ACCESSO_NEGATO\n"
-                    print("Status: PIN Errato. Invio il comando di Negazione ad Arduino.")
-
+                    comando_risposta = f"ACCESSO_NEGATO:{utente_corrente['nome']}\n"
+                    print(f"Status: PIN Errato per {utente_corrente['nome']}. Invio il comando di Negazione ad Arduino.")
             else:
-                comando_risposta = "ACCESSO_NEGATO\n"
+                comando_risposta = "ACCESSO_NEGATO:NOME_NON_DISPONIBILE\n"
                 print("Status: Nessuna carta valida letta prima del PIN.")
 
             master.write(comando_risposta.encode('utf-8'))

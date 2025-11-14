@@ -28,24 +28,28 @@ void display_Attesa() {
     digitalWrite(LED_ROSSO_PIN, LOW);
 }
 
-void display_AccessoConcesso() {
+void display_AccessoConcesso(String nomeUtente) {
     digitalWrite(LED_VERDE_PIN, HIGH);
     digitalWrite(LED_ROSSO_PIN, LOW);
     mylcd.clear();
     mylcd.setCursor(0, 0);
     mylcd.print("Accesso");
     mylcd.setCursor(0, 1);
-    mylcd.print("Consentito");
+    mylcd.print(nomeUtente);  // Mostra il nome dell'utente
 }
 
-void display_AccessoNegato() {
+void display_AccessoNegato(String nomeUtente = "") {
     digitalWrite(LED_VERDE_PIN, LOW);
     digitalWrite(LED_ROSSO_PIN, HIGH);
     mylcd.clear();
     mylcd.setCursor(0, 0);
     mylcd.print("Accesso");
     mylcd.setCursor(0, 1);
-    mylcd.print("Negato");
+    if (nomeUtente.length() > 0) {
+        mylcd.print(nomeUtente);
+    } else {
+        mylcd.print("Negato");
+    }
 }
 
 void display_InserimentoPIN() {
@@ -54,22 +58,26 @@ void display_InserimentoPIN() {
     mylcd.print("Inserisci PIN:");
     mylcd.setCursor(0, 1);
     mylcd.print(pinInserito);
-    // Aggiungi indicazioni per l'utente
+    // Aggiungi underscore per cifre mancanti
     for (int i = pinInserito.length(); i < 4; i++) {
         mylcd.print("_");
     }
     mylcd.print(" A=OK B=Canc");
 }
 
-void display_PINErrato() {
+void display_PINErrato(String nomeUtente = "") {
     digitalWrite(LED_VERDE_PIN, LOW);
     digitalWrite(LED_ROSSO_PIN, HIGH);
     mylcd.clear();
     mylcd.setCursor(0, 0);
     mylcd.print("PIN ERRATO");
     mylcd.setCursor(0, 1);
-    mylcd.print("Riprova...");
-    delay(1000); // Aspetta 2 secondi
+    if (nomeUtente.length() > 0) {
+        mylcd.print(nomeUtente);
+    } else {
+        mylcd.print("Riprova...");
+    }
+    delay(1000);
     // Torna all'inserimento PIN
     digitalWrite(LED_VERDE_PIN, HIGH);
     digitalWrite(LED_ROSSO_PIN, LOW);
@@ -83,7 +91,7 @@ void display_PINErrato() {
 void setup() {
     Wire.begin();
     mylcd.begin(16, 2);
-    Serial.begin(9600); // Inizializzazione Seriale per comunicazione con Python
+    Serial.begin(9600); // Comunicazione con Python
 
     pinMode(LED_VERDE_PIN, OUTPUT);
     pinMode(LED_ROSSO_PIN, OUTPUT);
@@ -91,27 +99,32 @@ void setup() {
     display_Attesa();
 }
 
-// --- Loop ---
+// --- Loop principale ---
 
 void loop() {
     unsigned long now = millis();
 
-    // 1. GESTIONE RICEZIONE COMANDI DA PYTHON (Seriale)
+    // 1. Gestione comandi da Python
     if (Serial.available() > 0) {
         String comando = Serial.readStringUntil('\n');
         comando.trim();
 
-        if (comando.startsWith("ACCESSO_CONCESSO")) {// Pin valido
+        if (comando.startsWith("ACCESSO_CONCESSO")) {
             stato = ACCESSO_CONCESSO;
-            display_AccessoConcesso();
-        } else if (comando.startsWith("ACCESSO_NEGATO")) { // Pin errato ma carta valida
-            // Mostra errore PIN e torna all'inserimento
-            display_PINErrato();
-        } else if (comando.startsWith("CARTA_NON_VALIDA")) { // Carta non registrata
+            int separatorIndex = comando.indexOf(':');
+            String nomeUtente = (separatorIndex != -1) ? comando.substring(separatorIndex + 1) : "";
+            display_AccessoConcesso(nomeUtente);
+
+        } else if (comando.startsWith("ACCESSO_NEGATO")) {
+            int separatorIndex = comando.indexOf(':');
+            String nomeUtente = (separatorIndex != -1) ? comando.substring(separatorIndex + 1) : "";
+            display_PINErrato(nomeUtente);
+
+        } else if (comando.startsWith("CARTA_NON_VALIDA")) {
             stato = ACCESSO_NEGATO;
             display_AccessoNegato();
-        } else if (comando.startsWith("CARTA_VALIDA")) { //Carta registrata
-            // Carta valida: procedi con l'inserimento del PIN
+
+        } else if (comando.startsWith("CARTA_VALIDA")) {
             digitalWrite(LED_VERDE_PIN, HIGH);
             digitalWrite(LED_ROSSO_PIN, LOW);
             stato = INSERIMENTO_PIN;
@@ -120,11 +133,11 @@ void loop() {
         }
     }
 
-    // 2. GESTIONE DATI DAL SENSORE (I2C)
+    // 2. Gestione dati dal sensore (I2C)
     if (now - lastRequest >= REQUEST_INTERVAL) {
         lastRequest = now;
 
-        Wire.requestFrom(8, 32); // Richiesta dati dall'Arduino Slave (indirizzo 8)
+        Wire.requestFrom(8, 32); // Richiesta dati dall'Arduino Slave
         if (Wire.available()) {
             String riga = "";
             while (Wire.available()) {
@@ -134,46 +147,37 @@ void loop() {
             }
 
             if (riga.length() > 0) {
-                // --- Gestione RFID ---
+                // --- RFID ---
                 if (riga.startsWith("C:")) {
                     String cardID = riga.substring(2);
 
                     if (cardID == "REMOVED") {
-                        // Carta rimossa
                         cartaPresente = false;
                         lastCardID = "";
                         stato = ATTESA;
                         display_Attesa();
                         pinInserito = "";
                     } else if (cardID != lastCardID) {
-                        // Nuova carta inserita - invia al server per verifica
                         lastCardID = cardID;
                         cartaPresente = true;
-
-                        // Invia l'ID della carta al server
-                        Serial.println(PREFIX_CARD + cardID);
+                        Serial.println(PREFIX_CARD + cardID); // invio a Python
                     }
                 }
 
-                // --- Gestione tastierino ---
+                // --- Tastierino ---
                 else if (riga.startsWith("K:")) {
                     char key = riga[2];
 
                     if (stato == INSERIMENTO_PIN && cartaPresente) {
                         if (key >= '0' && key <= '9') {
-                            // Inserimento numeri (solo se non abbiamo già 4 cifre)
                             if (pinInserito.length() < 4) {
                                 pinInserito += key;
                                 display_InserimentoPIN();
                             }
-                        }
-                        else if (key == 'A') {
-                            // Tasto A: Conferma PIN
+                        } else if (key == 'A') {
                             if (pinInserito.length() == 4) {
-                                // PIN COMPLETO: Invio a Python con prefisso
                                 Serial.println(PREFIX_PIN + pinInserito);
                             } else {
-                                // PIN non completo, puoi mostrare un messaggio di errore
                                 mylcd.clear();
                                 mylcd.setCursor(0, 0);
                                 mylcd.print("PIN troppo corto");
@@ -182,9 +186,7 @@ void loop() {
                                 delay(2000);
                                 display_InserimentoPIN();
                             }
-                        }
-                        else if (key == 'B') {
-                            // Tasto B: Cancella ultimo carattere
+                        } else if (key == 'B') {
                             if (pinInserito.length() > 0) {
                                 pinInserito.remove(pinInserito.length() - 1);
                                 display_InserimentoPIN();
