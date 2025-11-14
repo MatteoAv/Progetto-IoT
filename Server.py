@@ -2,6 +2,7 @@ import serial
 import time
 from dotenv import load_dotenv
 import os
+import certifi
 from pymongo.mongo_client import MongoClient
 
 load_dotenv()
@@ -13,7 +14,7 @@ DB_CLUSTER = os.getenv("DB_CLUSTER")
 DB_NAME = os.getenv("DB_NAME")
 
 uri = f"mongodb+srv://{DB_USERNAME}:{DB_PASSWORD}@{DB_CLUSTER}/?appName=ClusterArduino"
-client = MongoClient(uri)
+client = MongoClient(uri, tlsCAFile=certifi.where())
 
 db = client[DB_NAME]
 collection = db['utenti']
