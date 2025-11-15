@@ -33,38 +33,51 @@ while True:
     data_pulito = data.decode('utf-8').strip()
 
     if data_pulito:
-        print(f"Ricevuto: {data_pulito}")
 
         # --- Gestione carta ---
         if data_pulito.startswith(PREFIX_CARD):
             card_id = data_pulito.replace(PREFIX_CARD, "")
-            print(f"ID Carta ricevuto: {card_id}")
+            print(f"Inserita carta con ID: {card_id}")
 
             # Ricerca nel database
             utente_corrente = collection.find_one({"card_id": card_id})
 
+            ## Caso in cui nel database è registrata la carta
             if utente_corrente:
-                comando_risposta = f"CARTA_VALIDA:{utente_corrente['nome']}\n"
-                print(f"Status: Carta Valida. Utente: {utente_corrente['nome']}. Invio comando per richiedere PIN.")
+                comando_risposta = "CARTA_VALIDA\n"
+                print("Carta valida")
+
+            ## Caso in cui nel database non è registrata la carta
             else:
                 comando_risposta = "CARTA_NON_VALIDA\n"
                 utente_corrente = None
-                print("Status: Carta Non Valida. Accesso negato.")
+                print("Carta non valida")
 
-            master.write(comando_risposta.encode('utf-8'))
+            master.write(comando_risposta.encode('utf-8')) ## Invia all'auduino se la carta è valida o meno
 
         # --- Gestione PIN ---
         elif data_pulito.startswith(PREFIX_PIN):
             pin_inserito = data_pulito.replace(PREFIX_PIN, "")
-            print(f"PIN ricevuto: {pin_inserito}")
+            print(f"Inserito PIN: {pin_inserito}")
 
             if utente_corrente:
+
+                   ## Caso in cui il pin della carta è corretto
                 if pin_inserito == utente_corrente["pin"]:
-                    comando_risposta = f"ACCESSO_CONCESSO:{utente_corrente['nome']}\n"
-                    print(f"Status: Accesso Consentito per {utente_corrente['nome']}. Invio il comando ad Arduino.")
+                    comando_risposta = (
+                        f"ACCESSO_CONCESSO:"
+                        f"{utente_corrente['nome']}|"
+                        f"{utente_corrente['cognome']}|"
+                        f"{utente_corrente['saldo']}\n"
+                    )
+
+                    print("Pin valido")
+                    print(f"Accesso concesso utente:{utente_corrente['nome']} {utente_corrente['cognome']}\n")
                 else:
-                    comando_risposta = f"ACCESSO_NEGATO:{utente_corrente['nome']}\n"
-                    print(f"Status: PIN Errato per {utente_corrente['nome']}. Invio il comando di Negazione ad Arduino.")
+
+                    ## Caso in cui il pin della carta non è corretto
+                    comando_risposta = "ACCESSO_NEGATO:\n"
+                    print("Pin non valido")
             else:
                 comando_risposta = "ACCESSO_NEGATO:NOME_NON_DISPONIBILE\n"
                 print("Status: Nessuna carta valida letta prima del PIN.")

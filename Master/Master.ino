@@ -28,14 +28,14 @@ void display_Attesa() {
     digitalWrite(LED_ROSSO_PIN, LOW);
 }
 
-void display_AccessoConcesso(String nomeUtente) {
+void display_AccessoConcesso(String nome, String cognome, String saldo) {
     digitalWrite(LED_VERDE_PIN, HIGH);
     digitalWrite(LED_ROSSO_PIN, LOW);
     mylcd.clear();
     mylcd.setCursor(0, 0);
-    mylcd.print("Accesso");
+    mylcd.print(nome + " " + cognome);
     mylcd.setCursor(0, 1);
-    mylcd.print(nomeUtente);  // Mostra il nome dell'utente
+    mylcd.print(saldo);  // Mostra il nome dell'utente
 }
 
 void display_AccessoNegato(String nomeUtente = "") {
@@ -45,39 +45,34 @@ void display_AccessoNegato(String nomeUtente = "") {
     mylcd.setCursor(0, 0);
     mylcd.print("Accesso");
     mylcd.setCursor(0, 1);
-    if (nomeUtente.length() > 0) {
-        mylcd.print(nomeUtente);
-    } else {
-        mylcd.print("Negato");
-    }
+    mylcd.print("Negato");
 }
 
 void display_InserimentoPIN() {
     mylcd.clear();
     mylcd.setCursor(0, 0);
-    mylcd.print("Inserisci PIN:");
-    mylcd.setCursor(0, 1);
+    mylcd.print("PIN: ");
+    
     mylcd.print(pinInserito);
     // Aggiungi underscore per cifre mancanti
     for (int i = pinInserito.length(); i < 6; i++) {
         mylcd.print("_");
     }
-    mylcd.print(" A=OK B=Canc");
+    
+    mylcd.setCursor(0, 1);
+    mylcd.print(" A=OK    B=Canc");
 }
 
-void display_PINErrato(String nomeUtente = "") {
+void display_PINErrato() {
     digitalWrite(LED_VERDE_PIN, LOW);
     digitalWrite(LED_ROSSO_PIN, HIGH);
     mylcd.clear();
     mylcd.setCursor(0, 0);
     mylcd.print("PIN ERRATO");
     mylcd.setCursor(0, 1);
-    if (nomeUtente.length() > 0) {
-        mylcd.print(nomeUtente);
-    } else {
-        mylcd.print("Riprova...");
-    }
+    mylcd.print("Riprova...");
     delay(1000);
+
     // Torna all'inserimento PIN
     digitalWrite(LED_VERDE_PIN, HIGH);
     digitalWrite(LED_ROSSO_PIN, LOW);
@@ -111,14 +106,26 @@ void loop() {
 
         if (comando.startsWith("ACCESSO_CONCESSO")) {
             stato = ACCESSO_CONCESSO;
+
+            // Estraggo la parte dopo "ACCESSO_CONCESSO:"
             int separatorIndex = comando.indexOf(':');
-            String nomeUtente = (separatorIndex != -1) ? comando.substring(separatorIndex + 1) : "";
-            display_AccessoConcesso(nomeUtente);
+            String datiUtente = (separatorIndex != -1) ? comando.substring(separatorIndex + 1) : "";
+
+            // Divido la stringa usando '|' come separatore
+            int p1 = datiUtente.indexOf('|');
+            int p2 = datiUtente.indexOf('|', p1 + 1);
+
+            String nome = (p1 != -1) ? datiUtente.substring(0, p1) : "";
+            String cognome = (p1 != -1 && p2 != -1) ? datiUtente.substring(p1 + 1, p2) : "";
+            String saldo = (p2 != -1) ? datiUtente.substring(p2 + 1) : "";
+
+            // Chiamo la funzione diplay_AccessoConcesso
+           display_AccessoConcesso(nome, cognome, saldo);
 
         } else if (comando.startsWith("ACCESSO_NEGATO")) {
             int separatorIndex = comando.indexOf(':');
             String nomeUtente = (separatorIndex != -1) ? comando.substring(separatorIndex + 1) : "";
-            display_PINErrato(nomeUtente);
+            display_PINErrato();
 
         } else if (comando.startsWith("CARTA_NON_VALIDA")) {
             stato = ACCESSO_NEGATO;
