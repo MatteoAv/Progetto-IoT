@@ -1,12 +1,14 @@
-import serial
+import socket
+import json
 import time
 from dotenv import load_dotenv
 import os
 import certifi
 from pymongo.mongo_client import MongoClient
 
+# ---- Connessione a MongoDB ----
 load_dotenv()
-port = os.getenv('SERIAL_PORT')
+
 DB_USERNAME = os.getenv("DB_USERNAME")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
 DB_CLUSTER = os.getenv("DB_CLUSTER")
@@ -18,70 +20,69 @@ client = MongoClient(uri, tlsCAFile=certifi.where())
 db = client[DB_NAME]
 collection = db['utenti']
 
-PREFIX_PIN = "PIN_INSERITO:"
-PREFIX_CARD = "CARD_ID:"
+# ---- Socket Server ----
+HOST = "0.0.0.0"
+PORT = 5000
 
-master = serial.Serial(port, 9600, timeout=0.1)
-time.sleep(2)
+print("[SERVER] In ascolto su porta", PORT)
 
-print("Pronto a ricevere")
+utente_corrente = None  # memorizza temporaneamente l’utente dopo la lettura della carta
 
-utente_corrente = None  # memorizza temporaneamente l'utente dopo la lettura della carta
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+    s.bind((HOST, PORT))
+    s.listen(5)
 
-while True:
-    data = master.readline()
-    data_pulito = data.decode('utf-8').strip()
+    while True:
+        conn, addr = s.accept()
+        print(f"[SERVER] Connessione da {addr}")
 
-    if data_pulito:
+        with conn:
+            while True:
+                data = conn.recv(1024)
+                if not data:
+                    break
 
-        # --- Gestione carta ---
-        if data_pulito.startswith(PREFIX_CARD):
-            card_id = data_pulito.replace(PREFIX_CARD, "")
-            print(f"Inserita carta con ID: {card_id}")
+                try:
+                    msg = json.loads(data.decode('utf-8').strip())
+                except json.JSONDecodeError:
+                    print("[SERVER] JSON non valido:", data)
+                    continue
 
-            # Ricerca nel database
-            utente_corrente = collection.find_one({"card_id": card_id})
+                tipo = msg.get("type")
+                valore = msg.get("value")
 
-            ## Caso in cui nel database è registrata la carta
-            if utente_corrente:
-                comando_risposta = "CARTA_VALIDA\n"
-                print("Carta valida")
+                risposta = {}
 
-            ## Caso in cui nel database non è registrata la carta
-            else:
-                comando_risposta = "CARTA_NON_VALIDA\n"
-                utente_corrente = None
-                print("Carta non valida")
+                # --- Gestione carta ---
+                if tipo == "card":
+                    utente_corrente = collection.find_one({"card_id": valore})
+                    if utente_corrente:
+                        risposta["status"] = "CARTA_VALIDA"
+                        print(f"Carta valida: {valore}")
+                    else:
+                        utente_corrente = None
+                        risposta["status"] = "CARTA_NON_VALIDA"
+                        print(f"Carta non valida: {valore}")
 
-            master.write(comando_risposta.encode('utf-8')) ## Invia all'auduino se la carta è valida o meno
+                # --- Gestione PIN ---
+                elif tipo == "pin":
+                    if utente_corrente:
+                        if valore == utente_corrente["pin"]:
+                            risposta["status"] = "ACCESSO_CONCESSO"
+                            risposta["nome"] = utente_corrente["nome"]
+                            risposta["cognome"] = utente_corrente["cognome"]
+                            risposta["saldo"] = str(utente_corrente["saldo"])
+                            print(f"PIN valido per {utente_corrente['nome']} {utente_corrente['cognome']}")
+                        else:
+                            risposta["status"] = "ACCESSO_NEGATO"
+                            print(f"PIN errato per {utente_corrente['nome']} {utente_corrente['cognome']}")
+                    else:
+                        risposta["status"] = "ACCESSO_NEGATO"
+                        print("PIN ricevuto senza carta valida")
 
-        # --- Gestione PIN ---
-        elif data_pulito.startswith(PREFIX_PIN):
-            pin_inserito = data_pulito.replace(PREFIX_PIN, "")
-            print(f"Inserito PIN: {pin_inserito}")
-
-            if utente_corrente:
-
-                   ## Caso in cui il pin della carta è corretto
-                if pin_inserito == utente_corrente["pin"]:
-                    comando_risposta = (
-                        f"ACCESSO_CONCESSO:"
-                        f"{utente_corrente['nome']}|"
-                        f"{utente_corrente['cognome']}|"
-                        f"{utente_corrente['saldo']}\n"
-                    )
-
-                    print("Pin valido")
-                    print(f"Accesso concesso utente:{utente_corrente['nome']} {utente_corrente['cognome']}\n")
                 else:
+                    risposta["status"] = "ERRORE"
+                    print("Tipo non riconosciuto:", tipo)
 
-                    ## Caso in cui il pin della carta non è corretto
-                    comando_risposta = "ACCESSO_NEGATO:\n"
-                    print("Pin non valido")
-            else:
-                comando_risposta = "ACCESSO_NEGATO:NOME_NON_DISPONIBILE\n"
-                print("Status: Nessuna carta valida letta prima del PIN.")
-
-            master.write(comando_risposta.encode('utf-8'))
-
-    time.sleep(0.01)
+                # Invia risposta JSON al client
+                conn.sendall((json.dumps(risposta) + "\n").encode('utf-8'))
