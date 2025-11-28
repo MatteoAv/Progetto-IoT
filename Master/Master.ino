@@ -1,13 +1,22 @@
-#include <Wire.h>
-#include <LiquidCrystal.h>
+#include <Wire.h> //per la comunicazione I2C
+#include <LiquidCrystal.h> //per il display
+#include <WiFiS3.h> //per connettersi al wifi
+#include <ArduinoJson.h> //per creare e leggere JSON
+#include "arduino_secrets.h" //contiene nome, password e ip
 
-#define LED_VERDE_PIN 8
-#define LED_ROSSO_PIN 9
-#define PREFIX_PIN "PIN_INSERITO:" // Prefisso per l'invio del PIN a Python
-#define PREFIX_CARD "CARD_ID:"     // Prefisso per l'invio dell'ID carta a Python
+// --- Pin e LCD ---
+#define LED_VERDE_PIN 8 //pin del led verde
+#define LED_ROSSO_PIN 9 //pin del led rosso
+LiquidCrystal mylcd(12, 11, 5, 4, 3, 2); //pin del display
 
-LiquidCrystal mylcd(12, 11, 5, 4, 3, 2);
+// --- WiFi e server ---
+char ssid[] = WIFI_SSID;
+char pass[] = WIFI_PASSWORD;
+char serverAddress[] = SERVER_ADDRESS; // IP del server Python
+int port = 5000;
+WiFiClient client;
 
+// --- Stato e variabili ---
 String pinInserito = "";
 String lastCardID = "";
 bool cartaPresente = false;
@@ -16,10 +25,9 @@ enum Stato { ATTESA, INSERIMENTO_PIN, ACCESSO_CONCESSO, ACCESSO_NEGATO };
 Stato stato = ATTESA;
 
 unsigned long lastRequest = 0;
-const unsigned long REQUEST_INTERVAL = 200; // Intervallo per la richiesta I2C
+const unsigned long REQUEST_INTERVAL = 200;
 
-// --- Funzioni di visualizzazione ---
-
+// --- Funzioni display ---
 void display_Attesa() {
     mylcd.clear();
     mylcd.setCursor(0, 0);
@@ -35,10 +43,10 @@ void display_AccessoConcesso(String nome, String cognome, String saldo) {
     mylcd.setCursor(0, 0);
     mylcd.print(nome + " " + cognome);
     mylcd.setCursor(0, 1);
-    mylcd.print(saldo);  // Mostra il nome dell'utente
+    mylcd.print(saldo);
 }
 
-void display_AccessoNegato(String nomeUtente = "") {
+void display_AccessoNegato(String msg = "") {
     digitalWrite(LED_VERDE_PIN, LOW);
     digitalWrite(LED_ROSSO_PIN, HIGH);
     mylcd.clear();
@@ -52,99 +60,92 @@ void display_InserimentoPIN() {
     mylcd.clear();
     mylcd.setCursor(0, 0);
     mylcd.print("PIN: ");
-    
     mylcd.print(pinInserito);
-    // Aggiungi underscore per cifre mancanti
-    for (int i = pinInserito.length(); i < 6; i++) {
-        mylcd.print("_");
-    }
-    
+    for (int i = pinInserito.length(); i < 6; i++) mylcd.print("_");
     mylcd.setCursor(0, 1);
-    mylcd.print(" A=OK    B=Canc");
-}
-
-void display_PINErrato() {
-    digitalWrite(LED_VERDE_PIN, LOW);
-    digitalWrite(LED_ROSSO_PIN, HIGH);
-    mylcd.clear();
-    mylcd.setCursor(0, 0);
-    mylcd.print("PIN ERRATO");
-    mylcd.setCursor(0, 1);
-    mylcd.print("Riprova...");
-    delay(1000);
-
-    // Torna all'inserimento PIN
-    digitalWrite(LED_VERDE_PIN, HIGH);
-    digitalWrite(LED_ROSSO_PIN, LOW);
-    stato = INSERIMENTO_PIN;
-    pinInserito = "";
-    display_InserimentoPIN();
+    mylcd.print("A=OK B=Canc");
 }
 
 // --- Setup ---
-
 void setup() {
     Wire.begin();
     mylcd.begin(16, 2);
-    Serial.begin(9600); // Comunicazione con Python
-
     pinMode(LED_VERDE_PIN, OUTPUT);
     pinMode(LED_ROSSO_PIN, OUTPUT);
 
+    Serial.begin(115200);
+    display_Attesa();
+
+    // --- Connessione WiFi ---
+    WiFi.begin(ssid, pass);
+    mylcd.clear();
+    mylcd.setCursor(0,0);
+    mylcd.print("Connessione WiFi");
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(300);
+        mylcd.print(".");
+    }
+    mylcd.clear();
+    mylcd.setCursor(0,0);
+    mylcd.print("WiFi connessa!");
+    delay(1000);
     display_Attesa();
 }
 
-// --- Loop principale ---
+// --- Funzione invio JSON al server ---
+void inviaAlServer(String tipo, String valore) {
+    if (!client.connected()) {
+        client.stop();
+        client.connect(serverAddress, port);
+    }
 
+    StaticJsonDocument<200> doc;
+    doc["type"] = tipo;      // "card" o "pin"
+    doc["value"] = valore;
+
+    String output;
+    serializeJson(doc, output);
+    client.println(output);
+}
+
+// --- Loop principale ---
 void loop() {
     unsigned long now = millis();
 
-    // 1. Gestione comandi da Python
-    if (Serial.available() > 0) {
-        String comando = Serial.readStringUntil('\n');
-        comando.trim();
+    // --- Ricezione risposta dal server ---
+    if (client.connected() && client.available()) {
+        String r = client.readStringUntil('\n');
 
-        if (comando.startsWith("ACCESSO_CONCESSO")) {
-            stato = ACCESSO_CONCESSO;
-
-            // Estraggo la parte dopo "ACCESSO_CONCESSO:"
-            int separatorIndex = comando.indexOf(':');
-            String datiUtente = (separatorIndex != -1) ? comando.substring(separatorIndex + 1) : "";
-
-            // Divido la stringa usando '|' come separatore
-            int p1 = datiUtente.indexOf('|');
-            int p2 = datiUtente.indexOf('|', p1 + 1);
-
-            String nome = (p1 != -1) ? datiUtente.substring(0, p1) : "";
-            String cognome = (p1 != -1 && p2 != -1) ? datiUtente.substring(p1 + 1, p2) : "";
-            String saldo = (p2 != -1) ? datiUtente.substring(p2 + 1) : "";
-
-            // Chiamo la funzione diplay_AccessoConcesso
-           display_AccessoConcesso(nome, cognome, saldo);
-
-        } else if (comando.startsWith("ACCESSO_NEGATO")) {
-            int separatorIndex = comando.indexOf(':');
-            String nomeUtente = (separatorIndex != -1) ? comando.substring(separatorIndex + 1) : "";
-            display_PINErrato();
-
-        } else if (comando.startsWith("CARTA_NON_VALIDA")) {
-            stato = ACCESSO_NEGATO;
-            display_AccessoNegato();
-
-        } else if (comando.startsWith("CARTA_VALIDA")) {
-            digitalWrite(LED_VERDE_PIN, HIGH);
-            digitalWrite(LED_ROSSO_PIN, LOW);
-            stato = INSERIMENTO_PIN;
-            pinInserito = "";
-            display_InserimentoPIN();
+        StaticJsonDocument<200> doc;
+        DeserializationError error = deserializeJson(doc, r);
+        if (!error) {
+            String status = doc["status"];
+            if (status == "CARTA_VALIDA") {
+                stato = INSERIMENTO_PIN;
+                pinInserito = "";
+                digitalWrite(LED_VERDE_PIN, HIGH);
+                digitalWrite(LED_ROSSO_PIN, LOW);
+                display_InserimentoPIN();
+            } else if (status == "CARTA_NON_VALIDA") {
+                stato = ACCESSO_NEGATO;
+                display_AccessoNegato();
+            } else if (status == "ACCESSO_CONCESSO") {
+                stato = ACCESSO_CONCESSO;
+                String nome = doc["nome"];
+                String cognome = doc["cognome"];
+                String saldo = doc["saldo"];
+                display_AccessoConcesso(nome, cognome, saldo);
+            } else if (status == "ACCESSO_NEGATO") {
+                display_AccessoNegato();
+            }
         }
     }
 
-    // 2. Gestione dati dal sensore (I2C)
+    // --- Lettura RFID e tastierino I2C ---
     if (now - lastRequest >= REQUEST_INTERVAL) {
         lastRequest = now;
 
-        Wire.requestFrom(8, 32); // Richiesta dati dall'Arduino Slave
+        Wire.requestFrom(8, 32);
         if (Wire.available()) {
             String riga = "";
             while (Wire.available()) {
@@ -157,7 +158,6 @@ void loop() {
                 // --- RFID ---
                 if (riga.startsWith("C:")) {
                     String cardID = riga.substring(2);
-
                     if (cardID == "REMOVED") {
                         cartaPresente = false;
                         lastCardID = "";
@@ -167,37 +167,32 @@ void loop() {
                     } else if (cardID != lastCardID) {
                         lastCardID = cardID;
                         cartaPresente = true;
-                        Serial.println(PREFIX_CARD + cardID); // invio a Python
+                        inviaAlServer("card", cardID);
                     }
                 }
 
                 // --- Tastierino ---
                 else if (riga.startsWith("K:")) {
                     char key = riga[2];
-
                     if (stato == INSERIMENTO_PIN && cartaPresente) {
-                        if (key >= '0' && key <= '9') {
-                            if (pinInserito.length() < 6) {
-                                pinInserito += key;
-                                display_InserimentoPIN();
-                            }
+                        if (key >= '0' && key <= '9' && pinInserito.length() < 6) {
+                            pinInserito += key;
+                            display_InserimentoPIN();
                         } else if (key == 'A') {
                             if (pinInserito.length() == 6) {
-                                Serial.println(PREFIX_PIN + pinInserito);
+                                inviaAlServer("pin", pinInserito);
                             } else {
                                 mylcd.clear();
-                                mylcd.setCursor(0, 0);
+                                mylcd.setCursor(0,0);
                                 mylcd.print("PIN troppo corto");
-                                mylcd.setCursor(0, 1);
+                                mylcd.setCursor(0,1);
                                 mylcd.print("Inserire 6 cifre");
                                 delay(2000);
                                 display_InserimentoPIN();
                             }
-                        } else if (key == 'B') {
-                            if (pinInserito.length() > 0) {
-                                pinInserito.remove(pinInserito.length() - 1);
-                                display_InserimentoPIN();
-                            }
+                        } else if (key == 'B' && pinInserito.length() > 0) {
+                            pinInserito.remove(pinInserito.length() - 1);
+                            display_InserimentoPIN();
                         }
                     }
                 }
