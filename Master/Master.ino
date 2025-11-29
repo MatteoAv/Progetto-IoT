@@ -8,7 +8,7 @@
 #include <Crypto.h>
 #include <AES.h>
 
-// --- Configurazione AES ---
+// --- Configurazione AES con WiFi---
 const size_t KEY_SIZE = 16;
 byte aes_key[KEY_SIZE] = {0x6C, 0x61, 0x43, 0x68, 0x69, 0x61, 0x76, 0x65, 0x53, 0x65, 0x67, 0x72, 0x65, 0x74, 0x61, 0x31}; 
 
@@ -41,7 +41,7 @@ const unsigned long REQUEST_INTERVAL = 200;
 // --- Buffer per AES (FISSI per evitare problemi di memoria) ---
 byte aes_buffer[128]; // Buffer fisso per AES
 
-// --- Funzioni crittografiche AES-ECB (OTTIMIZZATE) ---
+// --- Funzioni crittografiche AES-ECB con WiFi---
 String encryptAES(String plaintext) {
     const int BLOCK_SIZE = 16;                      // definiamo la dimensione dei blocchi a 16 byte (128 bit)--
     int len = plaintext.length();                   // calcoliamo la lunghezza del messaggio da cifrare --
@@ -206,7 +206,7 @@ void setup() {
     aes128.setKey(aes_key, KEY_SIZE);
     
     // Display iniziale con delay
-    delay(100);
+    delay(10);
     display_Attesa();
 
     // --- Connessione WiFi ---
