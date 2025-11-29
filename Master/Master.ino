@@ -10,10 +10,14 @@
 
 // --- Configurazione AES con WiFi---
 const size_t KEY_SIZE = 16;
-byte aes_key[KEY_SIZE] = {0x6C, 0x61, 0x43, 0x68, 0x69, 0x61, 0x76, 0x65, 0x53, 0x65, 0x67, 0x72, 0x65, 0x74, 0x61, 0x31}; 
-
+byte aes_key[KEY_SIZE] = {0x6C, 0x61, 0x43, 0x68, 0x69, 0x61, 0x76, 0x65, 0x53, 0x65, 0x67, 0x72, 0x65, 0x74, 0x61, 0x31};
 // Oggetto AES
 AES128 aes128;
+
+// --- Configurazione AES per I2C ---
+byte i2c_key[KEY_SIZE] = {0x1A,0x2B,0x3C,0x4D,0x5E,0x6F,0x7A,0x8B,0x9C,0xAD,0xBE,0xCF,0xD1,0xE2,0xF3,0x04};
+// Oggetto AES
+AES128 aes_i2c;
 
 // --- Pin e LCD ---
 #define LED_VERDE_PIN 8 
@@ -40,6 +44,7 @@ const unsigned long REQUEST_INTERVAL = 200;
 
 // --- Buffer per AES (FISSI per evitare problemi di memoria) ---
 byte aes_buffer[128]; // Buffer fisso per AES
+byte i2c_buffer[32];  // Buffer dedicato per I2C
 
 // --- Funzioni crittografiche AES-ECB con WiFi---
 String encryptAES(String plaintext) {
@@ -62,7 +67,7 @@ String encryptAES(String plaintext) {
     if (len % BLOCK_SIZE == 0) {
         padding_len = BLOCK_SIZE;  // testo già multiplo di 16 → aggiungi un blocco di padding, così chi decifra sa comunque quanti byte togliere
     } else {
-        padding_len = BLOCK_SIZE - (len % BLOCK_SIZE);  // completa l’ultimo blocco
+        padding_len = BLOCK_SIZE - (len % BLOCK_SIZE);  // completa l'ultimo blocco
     }
     int paddedLen = len + padding_len; // lunghezza totale messaggio+padding
     
@@ -140,6 +145,46 @@ String decryptAES(String encryptedHex) {
     return decrypted;
 }
 
+// --- Funzioni AES per I2C ---
+String decryptI2CData(String encryptedHex) {
+    const int BLOCK_SIZE = 16;
+    
+    // La stringa cifrata deve essere esattamente 32 caratteri hex (16 byte)
+    if (encryptedHex.length() != 32) {
+        Serial.println("Errore: Dati I2C cifrati di dimensione errata");
+        return "";
+    }
+    
+    // Converti hex to bytes
+    memset(i2c_buffer, 0, sizeof(i2c_buffer));
+    for (int i = 0; i < 16; i++) {
+        String byteStr = encryptedHex.substring(i * 2, i * 2 + 2);
+        i2c_buffer[i] = (byte) strtol(byteStr.c_str(), NULL, 16);
+    }
+    
+    // Decifra il blocco
+    aes_i2c.decryptBlock(i2c_buffer, i2c_buffer);
+    
+    // Rimuovi padding PKCS7
+    byte padding = i2c_buffer[15];
+    int dataLen = 16;
+    if (padding > 0 && padding <= BLOCK_SIZE) {
+        dataLen = 16 - padding;
+    }
+    
+    // Converti in stringa
+    String decrypted = "";
+    for (int i = 0; i < dataLen; i++) {
+        // Filtra solo caratteri stampabili e validi per i nostri comandi
+        char c = (char)i2c_buffer[i];
+        if (c >= 32 && c <= 126) { // Caratteri ASCII stampabili
+            decrypted += c;
+        }
+    }
+    
+    return decrypted;
+}
+
 // --- Funzioni display ---
 void display_Attesa() {
     mylcd.clear();
@@ -202,11 +247,12 @@ void setup() {
 
     Serial.begin(115200); 
     
-    // Inizializza AES con la chiave
-    aes128.setKey(aes_key, KEY_SIZE);
+    // Inizializza AES con le chiavi
+    aes128.setKey(aes_key, KEY_SIZE);   // Per WiFi
+    aes_i2c.setKey(i2c_key, KEY_SIZE);  // Per I2C
     
     // Display iniziale con delay
-    delay(10);
+    delay(100);
     display_Attesa();
 
     // --- Connessione WiFi ---
@@ -333,61 +379,73 @@ void loop() {
         Wire.requestFrom(8, 32);                    // (indirizzo dello slave, numero massimo di byte richiesti)
         delay(5); // Piccolo delay per stabilizzare I2C
 
-        // Se ci sono dati disponibili, vengono letti uno alla volta per inserirli nella stringa riga
+        // Se ci sono dati disponibili, vengono letti uno alla volta
         if (Wire.available()) {
-            String riga = "";
+            String encryptedHex = "";
             while (Wire.available()) {
                 char c = Wire.read();
-                if (c == '\n') break;   // il messaggio termina quando viene letto un carattere \n
-                riga += c;
+                if (c != 0) encryptedHex += c; // Ignora byte nulli
             }
+            encryptedHex.trim();
 
-            if (riga.length() > 0) {
+            // Debug: mostra i dati ricevuti
+            Serial.print("Dati ricevuti (cifrati): ");
+            Serial.println(encryptedHex);
 
-                // Se il messaggio comincia con C riguarda la carta RFID
-                if (riga.startsWith("C:")) {
-                    String cardID = riga.substring(2);
-                    if (cardID == "REMOVED") {              //se la carta è stata rimossa resetta tutto e torna in attesa
-                        cartaPresente = false;
-                        lastCardID = "";
-                        stato = ATTESA;
-                        display_Attesa();
-                        pinInserito = "";
-                    } else if (cardID != lastCardID) {      //se la carta è nuova invia l'ID al server
-                        lastCardID = cardID;
-                        cartaPresente = true;
-                        inviaAlServer("card", cardID);
+            // Se abbiamo dati cifrati validi (32 caratteri hex = 16 byte)
+            if (encryptedHex.length() == 32) {
+                // Decifra i dati
+                String decrypted = decryptI2CData(encryptedHex);
+                
+                Serial.print("Dati decifrati: ");
+                Serial.println(decrypted);
+
+                if (decrypted.length() > 0) {
+                    // Se il messaggio comincia con C riguarda la carta RFID
+                    if (decrypted.startsWith("C:")) {
+                        String cardID = decrypted.substring(2);
+                        if (cardID == "REMOVED") {              //se la carta è stata rimossa resetta tutto e torna in attesa
+                            cartaPresente = false;
+                            lastCardID = "";
+                            stato = ATTESA;
+                            display_Attesa();
+                            pinInserito = "";
+                        } else if (cardID != lastCardID) {      //se la carta è nuova invia l'ID al server
+                            lastCardID = cardID;
+                            cartaPresente = true;
+                            inviaAlServer("card", cardID);
+                        }
                     }
-                }
 
-                // Se il messaggio comincia con K riguarda il tastierino
-                else if (riga.startsWith("K:")) {
-                    char key = riga[2];
-                    /*
-                    prende il carattere digitato dal tastierino,
-                    siccome i messaggi provenienti dal tastierino sono di questo tipo: K:tasto, prendiamo il carattere 2
-                    In base al tasto premuto dal tastierino si verificano i seguenti eventi
-                    */
-                    if (stato == INSERIMENTO_PIN && cartaPresente) {
-                        if (key >= '0' && key <= '9' && pinInserito.length() < 6) {
-                            pinInserito += key;
-                            display_InserimentoPIN();
-                        } else if (key == 'A') {
-                            if (pinInserito.length() == 6) {
-                                inviaAlServer("pin", pinInserito);
-                            } else {
-                                mylcd.clear();
-                                delay(10);
-                                mylcd.setCursor(0,0);
-                                mylcd.print("PIN troppo corto");
-                                mylcd.setCursor(0,1);
-                                mylcd.print("Inserire 6 cifre");
-                                delay(2000);
+                    // Se il messaggio comincia con K riguarda il tastierino
+                    else if (decrypted.startsWith("K:")) {
+                        char key = decrypted[2];
+                        /*
+                        prende il carattere digitato dal tastierino,
+                        siccome i messaggi provenienti dal tastierino sono di questo tipo: K:tasto, prendiamo il carattere 2
+                        In base al tasto premuto dal tastierino si verificano i seguenti eventi
+                        */
+                        if (stato == INSERIMENTO_PIN && cartaPresente) {
+                            if (key >= '0' && key <= '9' && pinInserito.length() < 6) {
+                                pinInserito += key;
+                                display_InserimentoPIN();
+                            } else if (key == 'A') {
+                                if (pinInserito.length() == 6) {
+                                    inviaAlServer("pin", pinInserito);
+                                } else {
+                                    mylcd.clear();
+                                    delay(10);
+                                    mylcd.setCursor(0,0);
+                                    mylcd.print("PIN troppo corto");
+                                    mylcd.setCursor(0,1);
+                                    mylcd.print("Inserire 6 cifre");
+                                    delay(2000);
+                                    display_InserimentoPIN();
+                                }
+                            } else if (key == 'B' && pinInserito.length() > 0) {
+                                pinInserito.remove(pinInserito.length() - 1);
                                 display_InserimentoPIN();
                             }
-                        } else if (key == 'B' && pinInserito.length() > 0) {
-                            pinInserito.remove(pinInserito.length() - 1);
-                            display_InserimentoPIN();
                         }
                     }
                 }
