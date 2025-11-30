@@ -8,11 +8,13 @@
 #include <Crypto.h>
 #include <AES.h>
 
-// --- Configurazione AES con WiFi---
+// Dimensione chiave usata per cifrare in AES, 16 byte -> 128 bit'
 const size_t KEY_SIZE = 16;
+
+// --- Configurazione AES per WiFi---
 byte aes_key[KEY_SIZE] = {0x6C, 0x61, 0x43, 0x68, 0x69, 0x61, 0x76, 0x65, 0x53, 0x65, 0x67, 0x72, 0x65, 0x74, 0x61, 0x31};
 // Oggetto AES
-AES128 aes128;
+AES128 aesWifi;
 
 // --- Configurazione AES per I2C ---
 byte i2c_key[KEY_SIZE] = {0x1A,0x2B,0x3C,0x4D,0x5E,0x6F,0x7A,0x8B,0x9C,0xAD,0xBE,0xCF,0xD1,0xE2,0xF3,0x04};
@@ -42,9 +44,9 @@ Stato stato = ATTESA;
 unsigned long lastRequest = 0;
 const unsigned long REQUEST_INTERVAL = 200;
 
-// --- Buffer per AES (FISSI per evitare problemi di memoria) ---
-byte aes_buffer[128]; // Buffer fisso per AES
-byte i2c_buffer[32];  // Buffer dedicato per I2C
+// --- Buffer per AES ---
+byte aes_buffer[128]; // Buffer per AES con WiFi
+byte i2c_buffer[32];  // Buffer per AES con I2C  -> Wire può trasportare al massimo 32 byte
 
 // --- Funzioni crittografiche AES-ECB con WiFi---
 String encryptAES(String plaintext) {
@@ -86,7 +88,7 @@ String encryptAES(String plaintext) {
     
     // Cifra a blocchi di 16 byte
     for (int i = 0; i < paddedLen; i += BLOCK_SIZE) {
-        aes128.encryptBlock(aes_buffer + i, aes_buffer + i);
+        aesWifi.encryptBlock(aes_buffer + i, aes_buffer + i);
         /*
         aes_buffer+i è il puntatore all'i-esimo blocco del buffer, la funzione prende quel blocco, lo cifra e
         sostituisce il vecchio contenuto del blocco (testo in chiaro) con quello nuovo (testo cifrato)
@@ -125,7 +127,7 @@ String decryptAES(String encryptedHex) {
     
     // Decifra a blocchi di 16 byte
     for (int i = 0; i < encryptedLen; i += BLOCK_SIZE) {
-        aes128.decryptBlock(aes_buffer + i, aes_buffer + i); // stesso funzionamento e stessa logica della funzione di cifratura
+        aesWifi.decryptBlock(aes_buffer + i, aes_buffer + i); // stesso funzionamento e stessa logica della funzione di cifratura
     }
     
     // Rimuovi padding
@@ -147,32 +149,38 @@ String decryptAES(String encryptedHex) {
 
 // --- Funzioni AES per I2C ---
 String decryptI2CData(String encryptedHex) {
-    const int BLOCK_SIZE = 16;
+    const int BLOCK_SIZE = 16;      // Dimensione dei blocchi
     
-    // La stringa cifrata deve essere esattamente 32 caratteri hex (16 byte)
+    // Controlliamo che la stringa da decifrare sia di 32 caratteri esadecimali (16 byte, grandezza di un blocco), se è diversa, la cifratura non è corretta
     if (encryptedHex.length() != 32) {
         Serial.println("Errore: Dati I2C cifrati di dimensione errata");
         return "";
     }
     
-    // Converti hex to bytes
+    // Usiamo memset per svuotare il buffer per evitare che ci possano essere dati residui da decifrature precedenti
     memset(i2c_buffer, 0, sizeof(i2c_buffer));
+    // Convertiamo la stringa da esadecimale a byte e salviamola nel buffer, al posto della vecchia stringa
     for (int i = 0; i < 16; i++) {
         String byteStr = encryptedHex.substring(i * 2, i * 2 + 2);
         i2c_buffer[i] = (byte) strtol(byteStr.c_str(), NULL, 16);
     }
     
-    // Decifra il blocco
+    // Decifriamo il blocco
     aes_i2c.decryptBlock(i2c_buffer, i2c_buffer);
     
-    // Rimuovi padding PKCS7
+    // Rimuoviamo il padding PKCS7
     byte padding = i2c_buffer[15];
     int dataLen = 16;
-    if (padding > 0 && padding <= BLOCK_SIZE) {
-        dataLen = 16 - padding;
+    if (padding > 0 && padding <= BLOCK_SIZE) { // Se nel blocco c'è un padding valido, lo prende dall'ultimo byte
+        dataLen = 16 - padding;                 // e calcola la lunghezza della stringa vera e propria senza padding
     }
+    /*
+       NOTA: questa soluzione per togliere il padding funziona qui perchè nella cifratura viene inviato sempre e solo un blocco di dimensione inferiore a 16 byte.
+       Se il blocco fosse di 16 byte o ci fossero più blocchi, questo metodo per calcolare il padding non funzionerebbe, perchè presuppone sempre
+       che l'ultimo byte del blocco sia padding, quindi nel nostro caso va bene, perchè le informazioni che inviamo sono più piccole di 16 byte
+    */
     
-    // Converti in stringa
+    // Convertiamo i byte (che ora sono in chiaro e senza padding) in stringa
     String decrypted = "";
     for (int i = 0; i < dataLen; i++) {
         // Filtra solo caratteri stampabili e validi per i nostri comandi
@@ -247,8 +255,8 @@ void setup() {
 
     Serial.begin(115200); 
     
-    // Inizializza AES con le chiavi
-    aes128.setKey(aes_key, KEY_SIZE);   // Per WiFi
+    // Inizializziamo AES con le chiavi
+    aesWifi.setKey(aes_key, KEY_SIZE);   // Per WiFi
     aes_i2c.setKey(i2c_key, KEY_SIZE);  // Per I2C
     
     // Display iniziale con delay
@@ -290,7 +298,7 @@ void setup() {
     }
 }
 
-// --- Funzione invio JSON cifrato al server ---
+// --- Funzione per inviare JSON cifrato al server ---
 void inviaAlServer(String tipo, String valore) {
 
     // Controlla se il client è già connesso al server, se non lo è aspetta un intervallo di 100 e poi ritenta, se la connessione non va termina
@@ -303,13 +311,13 @@ void inviaAlServer(String tipo, String valore) {
         }
     }
 
-    // Crea il contenitore JSON di 200 byte in cui verrano messi i dati da inviare
+    // Crea il contenitore JSON di 200 byte in cui verranno messi i dati da inviare
     StaticJsonDocument<200> doc;
     doc["type"] = tipo;      
     doc["value"] = valore;
 
 
-    // converte il json in una stringa
+    // Converte il json in una stringa
     String json_payload;
     serializeJson(doc, json_payload);
 
@@ -386,19 +394,11 @@ void loop() {
                 char c = Wire.read();
                 if (c != 0) encryptedHex += c; // Ignora byte nulli
             }
-            encryptedHex.trim();
+            encryptedHex.trim(); // Rimuoviamo eventuali spazi bianchi a inizio o fine stringa
 
-            // Debug: mostra i dati ricevuti
-            Serial.print("Dati ricevuti (cifrati): ");
-            Serial.println(encryptedHex);
-
-            // Se abbiamo dati cifrati validi (32 caratteri hex = 16 byte)
+            // Se abbiamo dati cifrati validi (32 caratteri esadecimali = 16 byte) li decifriamo
             if (encryptedHex.length() == 32) {
-                // Decifra i dati
                 String decrypted = decryptI2CData(encryptedHex);
-                
-                Serial.print("Dati decifrati: ");
-                Serial.println(decrypted);
 
                 if (decrypted.length() > 0) {
                     // Se il messaggio comincia con C riguarda la carta RFID
@@ -410,7 +410,7 @@ void loop() {
                             stato = ATTESA;
                             display_Attesa();
                             pinInserito = "";
-                        } else if (cardID != lastCardID) {      //se la carta è nuova invia l'ID al server
+                        } else if (cardID != lastCardID) {      //se la carta è diversa da quella che stava inserita prima invia l'ID al server
                             lastCardID = cardID;
                             cartaPresente = true;
                             inviaAlServer("card", cardID);
@@ -422,7 +422,7 @@ void loop() {
                         char key = decrypted[2];
                         /*
                         prende il carattere digitato dal tastierino,
-                        siccome i messaggi provenienti dal tastierino sono di questo tipo: K:tasto, prendiamo il carattere 2
+                        siccome i messaggi provenienti dal tastierino sono di questo tipo: K:"tasto", prendiamo il carattere 2
                         In base al tasto premuto dal tastierino si verificano i seguenti eventi
                         */
                         if (stato == INSERIMENTO_PIN && cartaPresente) {
