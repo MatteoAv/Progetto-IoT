@@ -26,6 +26,10 @@ AES128 aes_i2c;
 #define LED_ROSSO_PIN 9 
 LiquidCrystal mylcd(12, 11, 5, 4, 3, 2); 
 
+
+// --- Pin Buzzer ---
+#define BUZZER_PIN 7
+
 // --- WiFi e server ---
 char ssid[] = WIFI_SSID;
 char pass[] = WIFI_PASSWORD;
@@ -193,6 +197,35 @@ String decryptI2CData(String encryptedHex) {
     return decrypted;
 }
 
+// ---Funzioni buzzer ---
+void suono_press_tastiera(){
+    tone(BUZZER_PIN, 1000, 100);
+    delay(100);
+}
+
+void suono_accesso_concesso(){
+    for(int i = 0; i < 4; i++){
+        tone(BUZZER_PIN, 400 + (i * 200), 200);
+        delay(250);
+    }
+    noTone(BUZZER_PIN);
+}
+
+void suono_accesso_negato(){
+    for(int i = 0; i < 3; i++){
+        tone(BUZZER_PIN, 300, 150);
+        delay(200);
+        tone(BUZZER_PIN, 100, 150);
+        delay(200);
+    }
+    noTone(BUZZER_PIN);
+}
+
+void suono_carta_valida(){
+    tone(BUZZER_PIN, 1000, 150);
+    delay(100);
+}
+
 // --- Funzioni display ---
 void display_Attesa() {
     mylcd.clear();
@@ -252,6 +285,7 @@ void setup() {
     mylcd.begin(16, 2);
     pinMode(LED_VERDE_PIN, OUTPUT);
     pinMode(LED_ROSSO_PIN, OUTPUT);
+    pinMode(BUZZER_PIN, OUTPUT);
 
     Serial.begin(115200); 
     
@@ -359,17 +393,21 @@ void loop() {
                         digitalWrite(LED_VERDE_PIN, HIGH);
                         digitalWrite(LED_ROSSO_PIN, LOW);
                         display_InserimentoPIN();
+                        suono_carta_valida();
                     } else if (status == "CARTA_NON_VALIDA") {
                         stato = ACCESSO_NEGATO;
                         display_AccessoNegato("Carta non valida");
+                        suono_accesso_negato();
                     } else if (status == "ACCESSO_CONCESSO") {
                         stato = ACCESSO_CONCESSO;
                         String nome = doc["nome"];
                         String cognome = doc["cognome"];
                         String saldo = doc["saldo"];
                         display_AccessoConcesso(nome, cognome, saldo);
+                        suono_accesso_concesso();
                     } else if (status == "ACCESSO_NEGATO") {
                         display_AccessoNegato("PIN errato");
+                        suono_accesso_negato();
                     }
                 } else {
                     Serial.println("Errore deserializzazione JSON");
@@ -429,6 +467,7 @@ void loop() {
                             if (key >= '0' && key <= '9' && pinInserito.length() < 6) {
                                 pinInserito += key;
                                 display_InserimentoPIN();
+                                suono_press_tastiera();
                             } else if (key == 'A') {
                                 if (pinInserito.length() == 6) {
                                     inviaAlServer("pin", pinInserito);
