@@ -1,47 +1,56 @@
-#include <Wire.h>
-#include "Keypad.h"
-#include <SPI.h>
-#include <MFRC522.h>
-#include <Crypto.h>
-#include <AES.h>
+#include <Wire.h>        // Comunicazione I2C
+#include "Keypad.h"      // Lettura tastierino a matrice
+#include <SPI.h>         // Comunicazione SPI per RFID
+#include <MFRC522.h>     // Lettura RFID/NFC RC522
+#include <Crypto.h>      // Libreria crittografia
+#include <AES.h>         // AES
+#include "slave_secrets.h" // Chiavi segrete (AES)
+
+
 
 // ---------- Configurazione Tastierino ----------
 const byte ROWS = 4;
 const byte COLS = 4;
+
+// mappa dei tasti
 char keys[ROWS][COLS] = {
   {'1','2','3','A'},
   {'4','5','6','B'},
   {'7','8','9','C'},
   {'*','0','#','D'}
 };
-byte rowPins[ROWS] = {9,8,7,6};             // Definiamo righe e colonne
-byte colPins[COLS] = {5,4,3,2};
+byte rowPins[ROWS] = {9,8,7,6}; //pin collegati alle righe           
+byte colPins[COLS] = {5,4,3,2}; //pin collegati alle colonne
 Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS); // Keypad gestisce la lettura dei tasti
+
+
 
 // ---------- Configurazione RFID ----------
 #define SS_PIN 53
 #define RST_PIN 10
 MFRC522 mfrc522(SS_PIN, RST_PIN); // Creiamo l'oggetto per gestire il sensore
 
-// ---------- Variabili globali ----------
-String lastData = "";
-volatile bool dataReady = false;
 
-bool cardPresente = false; // indica lo stato del lettore, è True se sul lettore è presente una carta, False altrimenti
-String currentID = "";
+
+// ---------- Variabili globali ----------
+String lastData = "";        //memorizza i dati da inviare via I2C
+bool dataReady = false;      //indica se c'è un dato nuovo da inviare o no
+
+bool cardPresente = false;   //indica se sul lettore RFID è presente una carta
+String currentID = "";       //memorizza l'id dell ultica carta letta
+
+
 
 // ---------- AES per I2C ----------
 AES128 aes_i2c;
-byte i2c_key[16] = {                           // Definiamo la chiave di cifratura a 128 bit
-  0x1A,0x2B,0x3C,0x4D,0x5E,0x6F,0x7A,0x8B,
-  0x9C,0xAD,0xBE,0xCF,0xD1,0xE2,0xF3,0x04
-};
+byte i2c_buffer[16]; //buffer per cifratura
 
-byte i2c_buffer[16]; // Buffer per cifratura
 
-// Funzione per cifrare dati con AES-ECB
+
+// ---------- Funzione per cifrare dati con AES-ECB ----------
+
 String encryptI2CData(String plaintext) {
-    int len = plaintext.length();
+    int len = plaintext.length(); //calcola la lunghezza del testo in chiaro
     /*
     Nella trasmissione Wire di I2C il limite massimo di dati che possono essere trasmessi per volta è di 32 byte, nella nostra cifratura noi inviamo un solo
     blocco alla volta (16 byte), in quanto i dati che devono essere trasmessi sono più piccoli, questo vuol dire però che i dati effettivi che possono essere inviati per volta
@@ -101,7 +110,7 @@ void setup() {
   Serial.begin(9600);
 
   // Inizializza AES con la chiave
-  aes_i2c.setKey(i2c_key, sizeof(i2c_key));
+  aes_i2c.setKey(I2C_KEY, sizeof(I2C_KEY));
 }
 
 void loop() {

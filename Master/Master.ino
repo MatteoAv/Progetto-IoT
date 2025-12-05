@@ -2,22 +2,18 @@
 #include <LiquidCrystal.h> 
 #include <WiFiS3.h> 
 #include <ArduinoJson.h> 
-#include "arduino_secrets.h" 
+#include "master_secrets.h" 
 
 // --- LIBRERIA CRYPTO (rweather) - Solo AES base ---
 #include <Crypto.h>
 #include <AES.h>
 
-// Dimensione chiave usata per cifrare in AES, 16 byte -> 128 bit'
-const size_t KEY_SIZE = 16;
 
 // --- Configurazione AES per WiFi---
-byte aes_key[KEY_SIZE] = {0x6C, 0x61, 0x43, 0x68, 0x69, 0x61, 0x76, 0x65, 0x53, 0x65, 0x67, 0x72, 0x65, 0x74, 0x61, 0x31};
 // Oggetto AES
 AES128 aesWifi;
 
 // --- Configurazione AES per I2C ---
-byte i2c_key[KEY_SIZE] = {0x1A,0x2B,0x3C,0x4D,0x5E,0x6F,0x7A,0x8B,0x9C,0xAD,0xBE,0xCF,0xD1,0xE2,0xF3,0x04};
 // Oggetto AES
 AES128 aes_i2c;
 
@@ -290,8 +286,8 @@ void setup() {
     Serial.begin(115200); 
     
     // Inizializziamo AES con le chiavi
-    aesWifi.setKey(aes_key, KEY_SIZE);   // Per WiFi
-    aes_i2c.setKey(i2c_key, KEY_SIZE);  // Per I2C
+    aesWifi.setKey(AES_KEY, 16);   // Per WiFi
+    aes_i2c.setKey(I2C_KEY, 16);  // Per I2C
     
     // Display iniziale con delay
     delay(100);
