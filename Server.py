@@ -6,6 +6,10 @@ from dotenv import load_dotenv
 from pymongo.mongo_client import MongoClient
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
+import hashlib
+import binascii
+
+
 
 # ---- Caricamento variabili ambiente ----
 load_dotenv()
@@ -15,7 +19,7 @@ DB_PASSWORD = os.getenv("DB_PASSWORD")
 DB_CLUSTER = os.getenv("DB_CLUSTER")
 DB_NAME = os.getenv("DB_NAME")
 
-uri = f"mongodb+srv://{DB_USERNAME}:{DB_PASSWORD}@{DB_CLUSTER}/?appName=ClusterArduino"
+uri = (f"mongodb+srv://{DB_USERNAME}:{DB_PASSWORD}@{DB_CLUSTER}/?appName=ClusterArduino")
 client = MongoClient(uri, tlsCAFile=certifi.where())
 
 db = client[DB_NAME]
@@ -23,7 +27,8 @@ collection = db['utenti']
 
 # ---- Crittografia AES-ECB ----
 # La stessa chiave usata nell'Arduino
-AES_KEY = b'\x6C\x61\x43\x68\x69\x61\x76\x65\x53\x65\x67\x72\x65\x74\x61\x31'
+hex_key = os.getenv("CHIAVE_AES")
+AES_KEY = binascii.unhexlify(hex_key)  # converte in bytes
 
 # Funzione per cifrare
 def encrypt_aes(plaintext):
@@ -77,6 +82,7 @@ def gestisci_client(conn, addr):
                 # identifica il tipo di messaggio
                 tipo = msg.get("type")
                 valore = msg.get("value")
+                valore = hashlib.sha256(valore.encode()).hexdigest() #calcolo l'hash del messaggio inviato in modo da confrontarlo con l'hash presente sul db
                 risposta = {}
 
                 # --- Gestione carta ---
@@ -106,7 +112,7 @@ def gestisci_client(conn, addr):
                             risposta["nome"] = utente_corrente["nome"]
                             risposta["cognome"] = utente_corrente["cognome"]
                             risposta["saldo"] = str(utente_corrente["saldo"])
-                            print(f"PIN valido per {utente_corrente['nome']} {utente_corrente['cognome']}")
+                            print(f"PIN {valore} valido per {utente_corrente['nome']} {utente_corrente['cognome']}")
                         else:
                             risposta["status"] = "ACCESSO_NEGATO"       # se sbagliato setta lo stato ad ACCESSO NEGATO
                             print(f"PIN errato per {utente_corrente['nome']} {utente_corrente['cognome']}")
