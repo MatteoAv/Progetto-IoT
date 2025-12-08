@@ -1,27 +1,27 @@
-#include <Wire.h> 
-#include <LiquidCrystal.h> 
-#include <WiFiS3.h> 
-#include <ArduinoJson.h> 
-#include "master_secrets.h" 
+#include <Wire.h>
+#include <LiquidCrystal.h>
+#include <WiFiS3.h>
+#include <ArduinoJson.h>
+#include "master_secrets.h"
 
-// --- LIBRERIA CRYPTO (rweather) - Solo AES base ---
+// --- LIBRERIE CRITTOGRAFICHE ---
 #include <Crypto.h>
-#include <AES.h>
+#include <AES.h>             // AES per WiFi
+#include <ChaChaPoly.h>      // ChaChaPoly per I2C
 
 
 // --- Configurazione AES per WiFi---
-// Oggetto AES
-AES128 aesWifi;
+AES128 aesWifi; // oggetto AES
 
-// --- Configurazione AES per I2C ---
-// Oggetto AES
-AES128 aes_i2c;
+// --- Configurazione I2C ---
+#define SLAVE_ADDR 8 // indirizzo I2X dello slave
+#define MAX_I2C_LEN 32  // il master richiede allo slave 32 byte: 16 byte dati + 16 byte tag
+
 
 // --- Pin e LCD ---
-#define LED_VERDE_PIN 8 
-#define LED_ROSSO_PIN 9 
-LiquidCrystal mylcd(12, 11, 5, 4, 3, 2); 
-
+#define LED_VERDE_PIN 8
+#define LED_ROSSO_PIN 9
+LiquidCrystal mylcd(12, 11, 5, 4, 3, 2);
 
 // --- Pin Buzzer ---
 #define BUZZER_PIN 7
@@ -29,14 +29,14 @@ LiquidCrystal mylcd(12, 11, 5, 4, 3, 2);
 // --- WiFi e server ---
 char ssid[] = WIFI_SSID;
 char pass[] = WIFI_PASSWORD;
-char serverAddress[] = SERVER_ADDRESS; 
+char serverAddress[] = SERVER_ADDRESS;
 int port = 5000;
 WiFiClient client;
 
 // --- Stato e variabili ---
-String pinInserito = "";
-String lastCardID = "";
-bool cartaPresente = false;
+String pinInserito = ""; // contiene il pin inserito dall'untente
+String lastCardID = ""; // contiene l'ultimo ID della carta
+bool cartaPresente = false; // indica se c'è una carta vicino al sensore
 
 enum Stato { ATTESA, INSERIMENTO_PIN, ACCESSO_CONCESSO, ACCESSO_NEGATO };
 Stato stato = ATTESA;
@@ -44,11 +44,150 @@ Stato stato = ATTESA;
 unsigned long lastRequest = 0;
 const unsigned long REQUEST_INTERVAL = 200;
 
-// --- Buffer per AES ---
-byte aes_buffer[128]; // Buffer per AES con WiFi
-byte i2c_buffer[32];  // Buffer per AES con I2C  -> Wire può trasportare al massimo 32 byte
+// --- Buffer per AES e I2C ---
+byte aes_buffer[128]; // Buffer per AES (WiFi)
 
-// --- Funzioni crittografiche AES-ECB con WiFi---
+
+// ---------- Funzione di decifratura ChaChaPoly ----------
+String decryptAndCheckI2C(uint8_t* buffer, size_t receivedLen) {
+    // Minimo 17 byte: almeno 1 byte dati + 16 byte tag
+    if (receivedLen < 17) return "";
+
+    // Separiamo il tag (ultimi 16 byte) dal ciphertext
+    size_t dataLen = receivedLen - 16;
+    uint8_t* ciphertext = buffer;
+    uint8_t* receivedTag = buffer + dataLen;
+
+    // Allochiamo buffer plaintext
+    uint8_t* plaintext = new uint8_t[dataLen + 1];
+
+    // ChaChaPoly
+    ChaChaPoly chacha;
+    chacha.setKey(I2CMASTER_KEY, sizeof(I2CMASTER_KEY));
+    chacha.setIV(I2CMASTER_IV, sizeof(I2CMASTER_IV));
+
+    // Decifra
+    chacha.decrypt(plaintext, ciphertext, dataLen);
+
+    // Verifica tag
+    if (!chacha.checkTag(receivedTag, 16)) {
+        Serial.println("Errore I2C: Tag ChaChaPoly non valido. Dati corrotti.");
+        delete[] plaintext; // dealloca plaintext
+        return "";
+    }
+
+    // Chiudi stringa
+    plaintext[dataLen] = '\0';
+
+    // Filtra caratteri stampabili
+    String decrypted = "";
+    for (size_t i = 0; i < dataLen; i++) {
+        char c = (char)plaintext[i];
+        if (c >= 32 && c <= 126) decrypted += c;
+    }
+
+    delete[] plaintext;
+    return decrypted;
+}
+
+
+// ---------- Funzione per richiedere dati allo slave ----------
+void requestDataAndProcess() {
+    const size_t CHUNK_SIZE = 16;
+    uint8_t tempBuffer[128];
+    size_t totalLen = 0;
+    bool allZeros = true;
+
+    // Richiediamo esattamente 32 byte (MAX_I2C_LEN)
+    Wire.requestFrom(SLAVE_ADDR, MAX_I2C_LEN);
+
+    while (Wire.available()) {
+        uint8_t b = Wire.read();
+        tempBuffer[totalLen++] = b;
+        if (b != 0x00) allZeros = false;
+        if (totalLen >= sizeof(tempBuffer)) break;
+    }
+
+    if (allZeros) return;
+
+    // DEBUG: stampa solo i byte effettivamente ricevuti
+    Serial.print("Pacchetto I2C raw (");
+    Serial.print(totalLen);
+    Serial.print(" byte): ");
+    for (size_t i = 0; i < totalLen; i++) {
+        if (tempBuffer[i] < 0x10) Serial.print("0");
+        Serial.print(tempBuffer[i], HEX);
+        Serial.print(" ");
+    }
+    Serial.println();
+
+    // Pulisci i byte di padding FF
+    size_t effectiveLen = totalLen;
+    // Controlla se ci sono padding FF alla fine
+    while (effectiveLen > 0 && tempBuffer[effectiveLen - 1] == 0xFF) {
+        effectiveLen--;
+    }
+
+    // Se dopo aver rimosso i padding FF non abbiamo almeno 17 byte, errore
+    if (effectiveLen < 17) {
+        Serial.println("ERRORE: Pacchetto troppo corto dopo rimozione padding");
+        return;
+    }
+
+    String decrypted = decryptAndCheckI2C(tempBuffer, effectiveLen);
+
+    if (decrypted.length() > 0) {
+        Serial.print("Pacchetto I2C decifrato: ");
+        Serial.println(decrypted);
+        
+        // --- Gestione dati decifrati ---
+        if (decrypted.startsWith("C:")) {
+            String cardID = decrypted.substring(2);
+            if (cardID == "REMOVED") {
+                cartaPresente = false;
+                lastCardID = "";
+                stato = ATTESA;
+                display_Attesa();
+                pinInserito = "";
+            } else if (cardID != lastCardID) {
+                lastCardID = cardID;
+                cartaPresente = true;
+                inviaAlServer("card", cardID);
+            }
+        } else if (decrypted.startsWith("K:")) {
+            char key = decrypted[2];
+            
+            if (stato == INSERIMENTO_PIN && cartaPresente) {
+                if (key >= '0' && key <= '9' && pinInserito.length() < 6) {
+                    pinInserito += key;
+                    display_InserimentoPIN();
+                    suono_press_tastiera();
+                } else if (key == 'A') {
+                    if (pinInserito.length() == 6) {
+                        inviaAlServer("pin", pinInserito);
+                    } else {
+                        mylcd.clear();
+                        mylcd.setCursor(0,0);
+                        mylcd.print("PIN troppo corto");
+                        mylcd.setCursor(0,1);
+                        mylcd.print("Inserire 6 cifre");
+                        delay(2000);
+                        display_InserimentoPIN();
+                    }
+                } else if (key == 'B' && pinInserito.length() > 0) {
+                    pinInserito.remove(pinInserito.length() - 1);
+                    display_InserimentoPIN();
+                }
+            }
+        }
+    } else {
+        Serial.println("Pacchetto I2C decifrato: dati corrotti o tag non valido");
+    }
+}
+
+
+
+// ---------- Cifratura AES-ECB ----------
 String encryptAES(String plaintext) {
     const int BLOCK_SIZE = 16;                      // definiamo la dimensione dei blocchi a 16 byte (128 bit)--
     int len = plaintext.length();                   // calcoliamo la lunghezza del messaggio da cifrare --
@@ -106,6 +245,8 @@ String encryptAES(String plaintext) {
     return hex_cipher;
 }
 
+
+// ---------- Decifratura AES-ECB ----------
 String decryptAES(String encryptedHex) {
     const int BLOCK_SIZE = 16;
 
@@ -147,53 +288,8 @@ String decryptAES(String encryptedHex) {
     return decrypted;
 }
 
-// --- Funzioni AES per I2C ---
-String decryptI2CData(String encryptedHex) {
-    const int BLOCK_SIZE = 16;      // Dimensione dei blocchi
-    
-    // Controlliamo che la stringa da decifrare sia di 32 caratteri esadecimali (16 byte, grandezza di un blocco), se è diversa, la cifratura non è corretta
-    if (encryptedHex.length() != 32) {
-        Serial.println("Errore: Dati I2C cifrati di dimensione errata");
-        return "";
-    }
-    
-    // Usiamo memset per svuotare il buffer per evitare che ci possano essere dati residui da decifrature precedenti
-    memset(i2c_buffer, 0, sizeof(i2c_buffer));
-    // Convertiamo la stringa da esadecimale a byte e salviamola nel buffer, al posto della vecchia stringa
-    for (int i = 0; i < 16; i++) {
-        String byteStr = encryptedHex.substring(i * 2, i * 2 + 2);
-        i2c_buffer[i] = (byte) strtol(byteStr.c_str(), NULL, 16);
-    }
-    
-    // Decifriamo il blocco
-    aes_i2c.decryptBlock(i2c_buffer, i2c_buffer);
-    
-    // Rimuoviamo il padding PKCS7
-    byte padding = i2c_buffer[15];
-    int dataLen = 16;
-    if (padding > 0 && padding <= BLOCK_SIZE) { // Se nel blocco c'è un padding valido, lo prende dall'ultimo byte
-        dataLen = 16 - padding;                 // e calcola la lunghezza della stringa vera e propria senza padding
-    }
-    /*
-       NOTA: questa soluzione per togliere il padding funziona qui perchè nella cifratura viene inviato sempre e solo un blocco di dimensione inferiore a 16 byte.
-       Se il blocco fosse di 16 byte o ci fossero più blocchi, questo metodo per calcolare il padding non funzionerebbe, perchè presuppone sempre
-       che l'ultimo byte del blocco sia padding, quindi nel nostro caso va bene, perchè le informazioni che inviamo sono più piccole di 16 byte
-    */
-    
-    // Convertiamo i byte (che ora sono in chiaro e senza padding) in stringa
-    String decrypted = "";
-    for (int i = 0; i < dataLen; i++) {
-        // Filtra solo caratteri stampabili e validi per i nostri comandi
-        char c = (char)i2c_buffer[i];
-        if (c >= 32 && c <= 126) { // Caratteri ASCII stampabili
-            decrypted += c;
-        }
-    }
-    
-    return decrypted;
-}
 
-// ---Funzioni buzzer ---
+// ---------- Funzioni buzzer ----------
 void suono_press_tastiera(){
     tone(BUZZER_PIN, 1000, 100);
     delay(100);
@@ -225,7 +321,7 @@ void suono_carta_valida(){
 // --- Funzioni display ---
 void display_Attesa() {
     mylcd.clear();
-    delay(10); // Piccolo delay per stabilizzare
+    delay(10);
     mylcd.setCursor(0, 0);
     mylcd.print("Inserire carta");
     digitalWrite(LED_VERDE_PIN, LOW);
@@ -240,7 +336,7 @@ void display_AccessoConcesso(String nome, String cognome, String saldo) {
     mylcd.setCursor(0, 0);
     mylcd.print(nome + " " + cognome);
     mylcd.setCursor(0, 1);
-    mylcd.print("Saldo: " + saldo + "€");
+    mylcd.print("Saldo: " + saldo + " EUR"); // Ho messo EUR invece di € per evitare problemi di caratteri su LCD
 }
 
 void display_AccessoNegato(String msg = "") {
@@ -264,7 +360,6 @@ void display_InserimentoPIN() {
     mylcd.setCursor(0, 0);
     mylcd.print("PIN: ");
     
-    // Mostra asterischi invece dei numeri reali
     for (int i = 0; i < pinInserito.length(); i++) {
         mylcd.print("*");
     }
@@ -283,11 +378,11 @@ void setup() {
     pinMode(LED_ROSSO_PIN, OUTPUT);
     pinMode(BUZZER_PIN, OUTPUT);
 
-    Serial.begin(115200); 
+    Serial.begin(115200);
     
-    // Inizializziamo AES con le chiavi
-    aesWifi.setKey(AES_KEY, 16);   // Per WiFi
-    aes_i2c.setKey(I2C_KEY, 16);  // Per I2C
+    // --- Inizializzazione Chiavi ---
+    aesWifi.setKey(AES_KEY, 16);    // Chiave AES per WiFi
+    // La chiave ChaChaPoly viene impostata all'interno della funzione di decrittazione
     
     // Display iniziale con delay
     delay(100);
@@ -321,9 +416,8 @@ void setup() {
         mylcd.print("Err. WiFi");
         mylcd.setCursor(0,1);
         mylcd.print("Riavvia manualm.");
-        // Non resettiamo, solo messaggio di errore
         while(true) {
-            delay(1000); // Loop infinito con messaggio di errore
+            delay(1000);
         }
     }
 }
@@ -331,7 +425,6 @@ void setup() {
 // --- Funzione per inviare JSON cifrato al server ---
 void inviaAlServer(String tipo, String valore) {
 
-    // Controlla se il client è già connesso al server, se non lo è aspetta un intervallo di 100 e poi ritenta, se la connessione non va termina
     if (!client.connected()) {
         client.stop();
         delay(100);
@@ -341,17 +434,13 @@ void inviaAlServer(String tipo, String valore) {
         }
     }
 
-    // Crea il contenitore JSON di 200 byte in cui verranno messi i dati da inviare
     StaticJsonDocument<200> doc;
-    doc["type"] = tipo;      
+    doc["type"] = tipo;    
     doc["value"] = valore;
 
-
-    // Converte il json in una stringa
     String json_payload;
     serializeJson(doc, json_payload);
 
-    // Cifra il JSON
     String encrypted = encryptAES(json_payload);
     
     if (encrypted.length() == 0) {
@@ -359,29 +448,27 @@ void inviaAlServer(String tipo, String valore) {
         return;
     }
 
-    // Invia i dati cifrati al server
     client.println(encrypted);
 }
 
 // --- Loop principale ---
 void loop() {
-    // indica i millisecondi passati da quando la scheda è stata avviata o resettata
     unsigned long now = millis();
 
-    // --- Ricezione risposta cifrata dal server ---
-    if (client.connected() && client.available()) {                           // Se la connessione è attiva e c'è almeno un dato da leggere
-        String encryptedResponse = client.readStringUntil('\n');              // legge la stringa fino al carattere newline
-        encryptedResponse.trim();                                             // rimuove spazi e ritorni di linea inutili
+    // --- Ricezione risposta cifrata dal server (Logica AES, Invariata) ---
+    if (client.connected() && client.available()) {
+        String encryptedResponse = client.readStringUntil('\n');
+        Serial.print(encryptedResponse);
+        encryptedResponse.trim();
         
         if (encryptedResponse.length() > 0) {
-            // Decifra la risposta
             String decryptedResponse = decryptAES(encryptedResponse);
             
             if (decryptedResponse.length() > 0) {
                 StaticJsonDocument<200> doc;
-                DeserializationError error = deserializeJson(doc, decryptedResponse); // converte il JSON decifrato in un oggetto per leggerne i valori
+                DeserializationError error = deserializeJson(doc, decryptedResponse);
                 
-                if (!error) {   // Se l'oggetto è valido e non ci sono errori controlla lo status restituito dal server
+                if (!error) {
                     String status = doc["status"];
                     if (status == "CARTA_VALIDA") {
                         stato = INSERIMENTO_PIN;
@@ -414,78 +501,10 @@ void loop() {
         }
     }
 
-    // --- Lettura RFID e tastierino I2C ---
-    if (now - lastRequest >= REQUEST_INTERVAL) {    // Controlla se è passato abbastanza tempo dall'ultima lettura I2C.
-        lastRequest = now;                          // Serve a evitare di leggere continuamente i dati dallo slave e sovraccaricare il bus.
-
-        Wire.requestFrom(8, 32);                    // (indirizzo dello slave, numero massimo di byte richiesti)
-        delay(5); // Piccolo delay per stabilizzare I2C
-
-        // Se ci sono dati disponibili, vengono letti uno alla volta
-        if (Wire.available()) {
-            String encryptedHex = "";
-            while (Wire.available()) {
-                char c = Wire.read();
-                if (c != 0) encryptedHex += c; // Ignora byte nulli
-            }
-            encryptedHex.trim(); // Rimuoviamo eventuali spazi bianchi a inizio o fine stringa
-
-            // Se abbiamo dati cifrati validi (32 caratteri esadecimali = 16 byte) li decifriamo
-            if (encryptedHex.length() == 32) {
-                String decrypted = decryptI2CData(encryptedHex);
-
-                if (decrypted.length() > 0) {
-                    // Se il messaggio comincia con C riguarda la carta RFID
-                    if (decrypted.startsWith("C:")) {
-                        String cardID = decrypted.substring(2);
-                        if (cardID == "REMOVED") {              //se la carta è stata rimossa resetta tutto e torna in attesa
-                            cartaPresente = false;
-                            lastCardID = "";
-                            stato = ATTESA;
-                            display_Attesa();
-                            pinInserito = "";
-                        } else if (cardID != lastCardID) {      //se la carta è diversa da quella che stava inserita prima invia l'ID al server
-                            lastCardID = cardID;
-                            cartaPresente = true;
-                            inviaAlServer("card", cardID);
-                        }
-                    }
-
-                    // Se il messaggio comincia con K riguarda il tastierino
-                    else if (decrypted.startsWith("K:")) {
-                        char key = decrypted[2];
-                        /*
-                        prende il carattere digitato dal tastierino,
-                        siccome i messaggi provenienti dal tastierino sono di questo tipo: K:"tasto", prendiamo il carattere 2
-                        In base al tasto premuto dal tastierino si verificano i seguenti eventi
-                        */
-                        if (stato == INSERIMENTO_PIN && cartaPresente) {
-                            if (key >= '0' && key <= '9' && pinInserito.length() < 6) {
-                                pinInserito += key;
-                                display_InserimentoPIN();
-                                suono_press_tastiera();
-                            } else if (key == 'A') {
-                                if (pinInserito.length() == 6) {
-                                    inviaAlServer("pin", pinInserito);
-                                } else {
-                                    mylcd.clear();
-                                    delay(10);
-                                    mylcd.setCursor(0,0);
-                                    mylcd.print("PIN troppo corto");
-                                    mylcd.setCursor(0,1);
-                                    mylcd.print("Inserire 6 cifre");
-                                    delay(2000);
-                                    display_InserimentoPIN();
-                                }
-                            } else if (key == 'B' && pinInserito.length() > 0) {
-                                pinInserito.remove(pinInserito.length() - 1);
-                                display_InserimentoPIN();
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    // --- Lettura RFID e tastierino I2C (Logica ChaChaPoly) ---
+    if (now - lastRequest >= REQUEST_INTERVAL) {
+        lastRequest = now;
+        requestDataAndProcess(); // Chiama la nuova funzione ChaChaPoly
     }
     
     // Piccola pausa per stabilizzare il loop

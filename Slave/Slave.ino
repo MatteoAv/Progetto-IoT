@@ -2,117 +2,96 @@
 #include "Keypad.h"      // Lettura tastierino a matrice
 #include <SPI.h>         // Comunicazione SPI per RFID
 #include <MFRC522.h>     // Lettura RFID/NFC RC522
-#include <Crypto.h>      // Libreria crittografia
-#include <AES.h>         // AES
-#include "slave_secrets.h" // Chiavi segrete (AES)
-
-
+#include <ChaChaPoly.h>  // Crittografia ChaCha20-Poly1305
+#include "slave_secrets.h"
 
 // ---------- Configurazione Tastierino ----------
 const byte ROWS = 4;
 const byte COLS = 4;
-
-// mappa dei tasti
 char keys[ROWS][COLS] = {
   {'1','2','3','A'},
   {'4','5','6','B'},
   {'7','8','9','C'},
   {'*','0','#','D'}
 };
-byte rowPins[ROWS] = {9,8,7,6}; //pin collegati alle righe           
-byte colPins[COLS] = {5,4,3,2}; //pin collegati alle colonne
-Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS); // Keypad gestisce la lettura dei tasti
-
+byte rowPins[ROWS] = {9,8,7,6};
+byte colPins[COLS] = {5,4,3,2};
+Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 
 
 // ---------- Configurazione RFID ----------
 #define SS_PIN 53
 #define RST_PIN 10
-MFRC522 mfrc522(SS_PIN, RST_PIN); // Creiamo l'oggetto per gestire il sensore
-
+MFRC522 mfrc522(SS_PIN, RST_PIN);
 
 
 // ---------- Variabili globali ----------
-String lastData = "";        //memorizza i dati da inviare via I2C
-bool dataReady = false;      //indica se c'è un dato nuovo da inviare o no
-
-bool cardPresente = false;   //indica se sul lettore RFID è presente una carta
-String currentID = "";       //memorizza l'id dell ultica carta letta
-
+String lastData = "";      // contiene i dati che vogliamo inviare
+bool dataReady = false;    // flag che indica se ci sono dati da mandare
+bool cardPresente = false; // indica se c'è una carta vicino al lettore
+String currentID = "";     // ID dell'ultima carta letta
 
 
-// ---------- AES per I2C ----------
-AES128 aes_i2c;
-byte i2c_buffer[16]; //buffer per cifratura
-
-
-
-// ---------- Funzione per cifrare dati con AES-ECB ----------
-
-String encryptI2CData(String plaintext) {
-    int len = plaintext.length(); //calcola la lunghezza del testo in chiaro
-    /*
-    Nella trasmissione Wire di I2C il limite massimo di dati che possono essere trasmessi per volta è di 32 byte, nella nostra cifratura noi inviamo un solo
-    blocco alla volta (16 byte), in quanto i dati che devono essere trasmessi sono più piccoli, questo vuol dire però che i dati effettivi che possono essere inviati per volta
-    sono 15 byte, in quanto ci serve sempre almeno 1 byte per il padding
-    */
-    if (len > 15) len = 15; // Limita il testo in chiaro a 15 byte,
-    
-    // Azzera il buffer e copia i nuovi dati nel buffer
-    memset(i2c_buffer, 0, sizeof(i2c_buffer));
-    plaintext.getBytes(i2c_buffer, len + 1);
-    
-    // Aggiungiamo il padding PKCS7 in base alla lunghezza del messaggio
-    int padding = 16 - len;
-    for (int i = len; i < 16; i++) {
-        i2c_buffer[i] = (byte)padding;
-    }
-    
-    // Cifriamo il singolo blocco
-    aes_i2c.encryptBlock(i2c_buffer, i2c_buffer);
-    
-    // Convertiamo i byte in esadecimale
-    String result = "";
-    for (int i = 0; i < 16; i++) {
-        if (i2c_buffer[i] < 0x10) result += "0";
-        result += String(i2c_buffer[i], HEX);
-    }
-    
-    return result;
+// ---------- Funzione di cifratura ChaChaPoly ----------
+void encryptI2CData(const uint8_t* plaintext, size_t len, uint8_t* ciphertext, uint8_t* tag) { //testo in chiaro, lunghezza testo in chiaro, testo cifrato, tag
+    ChaChaPoly chacha; //crea un oggetto ChaChaPoly
+    chacha.setKey(I2CSLAVE_KEY, sizeof(I2CSLAVE_KEY)); // setta la chiave
+    chacha.setIV(I2CSLAVE_IV, sizeof(I2CSLAVE_IV)); // setta il nonce
+    chacha.encrypt(ciphertext, plaintext, len);  //cifra il testo e lo inserisce i ciphertext
+    chacha.computeTag(tag, 16); // calcola il tag per verificare integrità e autenticità del messaggio
 }
 
+
+
+// ---------- Funzione per inviare dati via I2C ----------
 void sendData() {
-  if (dataReady && lastData.length() > 0) {
-    // Cifra i dati prima di inviarli
-    String encrypted = encryptI2CData(lastData);
+    if (dataReady && lastData.length() > 0) { // se ci sono dati
+        size_t len = lastData.length(); // calcola la lunghezza del dato
+        uint8_t* buffer = (uint8_t*) malloc(len); // alloca un buffer
+        memcpy(buffer, lastData.c_str(), len); // copia i len byte della stringa lastData dentro buffer
 
-    // Invia i dati cifrati
-    Wire.write(encrypted.c_str(), encrypted.length()); // Wire.write(i dati da inviare (convertiti in un puntatore a carattere), la dimensione dei dati)
+        uint8_t* ciphertext = (uint8_t*) malloc(len); // alloca un buffer cuphertext di dimensione len
+        uint8_t tag[16];
+        encryptI2CData(buffer, len, ciphertext, tag); // cifra i dati e inserisce in ciphertext, calcola inoltre il tag
 
-    // Resettale variabili relative ai dati dopo averli inviati
-    dataReady = false;
-    lastData = "";
-  } else {
-    /* Se non ci sono dati, invia una stringa vuota cifrata
-       Questo perchè quando il master fa una richiesta lo slave deve sempre rispondere, quindi se non ci sono dati
-       da inviare, risponde con una stringa vuota, altrimenti se il master non riceve nessun byte si possono verificare errori o comportamenti strani
-     */
-    String emptyEncrypted = encryptI2CData("");
-    Wire.write(emptyEncrypted.c_str(), emptyEncrypted.length());
-  }
+        // Calcola dimensione totale
+        size_t totalSize = len + 16;
+        
+        // Invia tutto in una volta con la dimensione corretta
+        Wire.write(ciphertext, len);
+        Wire.write(tag, 16);
+        
+        // Se necessario, aggiungi padding fino a 32 byte
+        if (totalSize < 32) {
+            uint8_t padding = 0xFF;
+            for (size_t i = totalSize; i < 32; i++) {
+                Wire.write(padding);
+            }
+        }
+
+        free(buffer); // libera la memoria allocata per il buffer
+        free(ciphertext); // libera la memoria allocata per ciphertext
+        dataReady = false; // setta dataReady a falso
+        lastData = ""; // svuota lastData
+    } else {
+        // Invia pacchetto IDLE (tutti zeri)
+        uint8_t idle[32] = {0};
+        Wire.write(idle, 32);
+    }
 }
 
+
+
+// ---------- Setup ----------
 void setup() {
-  Wire.begin(8);               // Imposta l'indirizzo I2C dello slave
-  Wire.onRequest(sendData);    // Callback per invio dati
-  SPI.begin();
-  mfrc522.PCD_Init();
-  Serial.begin(9600);
-
-  // Inizializza AES con la chiave
-  aes_i2c.setKey(I2C_KEY, sizeof(I2C_KEY));
+    Wire.begin(8);            // Indirizzo I2C slave
+    Wire.onRequest(sendData); // Callback invio dati
+    SPI.begin();
+    mfrc522.PCD_Init();
+    Serial.begin(9600);
 }
 
+// ---------- Loop principale ----------
 void loop() {
   // --- Lettura tastierino ---
   char key = keypad.getKey();

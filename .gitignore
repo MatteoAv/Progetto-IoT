@@ -215,6 +215,9 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+./idea
 # per arduino
+
 master_secrets.h
 slave_secrets.h
+
