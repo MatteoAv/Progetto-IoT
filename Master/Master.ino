@@ -8,6 +8,7 @@
 #include <Crypto.h>
 #include <AES.h>             // AES per WiFi
 #include <ChaChaPoly.h>      // ChaChaPoly per I2C
+#include <Curve25519.h>
 
 
 // --- Configurazione AES per WiFi---
@@ -44,8 +45,14 @@ Stato stato = ATTESA;
 unsigned long lastRequest = 0;
 const unsigned long REQUEST_INTERVAL = 200;
 
-// --- Buffer per AES e I2C ---
 byte aes_buffer[128]; // Buffer per AES (WiFi)
+byte aesKey[16];          // AES-128 per WiFi, derivata dal Diffie-Hellman
+byte sharedSecret[32];    // Shared secret derivata da Curve25519
+
+// Chiavi accordo DH
+uint8_t masterPriv[32];
+uint8_t masterPub[32];
+uint8_t serverPub[32];
 
 
 // ---------- Funzione di decifratura ChaChaPoly ----------
@@ -139,7 +146,7 @@ void requestDataAndProcess() {
     if (decrypted.length() > 0) {
         Serial.print("Pacchetto I2C decifrato: ");
         Serial.println(decrypted);
-        
+
         // --- Gestione dati decifrati ---
         if (decrypted.startsWith("C:")) {
             String cardID = decrypted.substring(2);
@@ -156,13 +163,14 @@ void requestDataAndProcess() {
             }
         } else if (decrypted.startsWith("K:")) {
             char key = decrypted[2];
-            
+
             if (stato == INSERIMENTO_PIN && cartaPresente) {
                 if (key >= '0' && key <= '9' && pinInserito.length() < 6) {
                     pinInserito += key;
                     display_InserimentoPIN();
                     suono_press_tastiera();
                 } else if (key == 'A') {
+                    suono_press_tastiera();
                     if (pinInserito.length() == 6) {
                         inviaAlServer("pin", pinInserito);
                     } else {
@@ -177,6 +185,7 @@ void requestDataAndProcess() {
                 } else if (key == 'B' && pinInserito.length() > 0) {
                     pinInserito.remove(pinInserito.length() - 1);
                     display_InserimentoPIN();
+                    suono_press_tastiera();
                 }
             }
         }
@@ -211,20 +220,20 @@ String encryptAES(String plaintext) {
         padding_len = BLOCK_SIZE - (len % BLOCK_SIZE);  // completa l'ultimo blocco
     }
     int paddedLen = len + padding_len; // lunghezza totale messaggio+padding
-    
+
     // Azzera il buffer per evitare che ci possano essere dati residui da cifrature precedenti
     // nello specifico memset setta a 0 tutti i 128 byte del buffer
     memset(aes_buffer, 0, sizeof(aes_buffer));
     // Copia il testo in chiaro nel buffer, len+1 indica il numero di byte da copiare, include anche il terminatore della stringa
     plaintext.getBytes(aes_buffer, len + 1);
-    
+
     // Aggiungi il padding PKCS7
     // Nel buffer, dopo aver inserito il testo in chiaro, aggiungiamo come padding nei byte successivi il valore del padding stesso
     // Esempio: se il messagio occupava 10 byte e quindi il padding è di 6 allora nel buffer avremo: [10 byte] 06 06 06 06 06 06
     for (int i = 0; i < padding_len; i++) {
         aes_buffer[len + i] = (byte)padding_len;
     }
-    
+
     // Cifra a blocchi di 16 byte
     for (int i = 0; i < paddedLen; i += BLOCK_SIZE) {
         aesWifi.encryptBlock(aes_buffer + i, aes_buffer + i);
@@ -241,7 +250,7 @@ String encryptAES(String plaintext) {
         if (aes_buffer[i] < 0x10) hex_cipher += "0"; // se il byte letto è più piccolo di 16, quindi in esadecimale avrebbe una sola cifra, aggiungi 0 davanti
         hex_cipher += String(aes_buffer[i], HEX);
     }
-    
+
     return hex_cipher;
 }
 
@@ -258,33 +267,33 @@ String decryptAES(String encryptedHex) {
         Serial.println("Errore: Dati cifrati troppo grandi.");
         return "";
     }
-    
+
     // Converti esadecimali in bytes
     memset(aes_buffer, 0, sizeof(aes_buffer)); // azzera il buffer (come nella cifratura)
     for (int i = 0; i < encryptedLen; i++) {
         String byteStr = encryptedHex.substring(i * 2, i * 2 + 2); // Ogni coppia di caratteri in esadecimale viene convertita in byte
         aes_buffer[i] = (byte) strtol(byteStr.c_str(), NULL, 16);  // Ora il buffer contiene i byte cifrati
     }
-    
+
     // Decifra a blocchi di 16 byte
     for (int i = 0; i < encryptedLen; i += BLOCK_SIZE) {
         aesWifi.decryptBlock(aes_buffer + i, aes_buffer + i); // stesso funzionamento e stessa logica della funzione di cifratura
     }
-    
+
     // Rimuovi padding
     byte padding = aes_buffer[encryptedLen - 1]; // l'ultimo byte indica quanti byte di padding sono stati aggiunti
     int dataLen = encryptedLen;
     if (padding > 0 && padding <= BLOCK_SIZE) { // Se il padding è valido (compreso tra 1 e 16)
         dataLen = encryptedLen - padding; // calcola la lunghezza reale del messaggio (senza padding)
     }
-    
+
     // Converti in stringa
     String decrypted = "";
     for (int i = 0; i < dataLen; i++) {
         decrypted += (char)aes_buffer[i];
     }
     // cicliamo sui byte decifrati del messaggio e convertiamo ogni byte in carattere, aggiungendolo alla stringa decrypted
-    
+
     return decrypted;
 }
 
@@ -359,17 +368,85 @@ void display_InserimentoPIN() {
     delay(10);
     mylcd.setCursor(0, 0);
     mylcd.print("PIN: ");
-    
+
     for (int i = 0; i < pinInserito.length(); i++) {
         mylcd.print("*");
     }
     for (int i = pinInserito.length(); i < 6; i++) {
         mylcd.print("_");
     }
-    
+
     mylcd.setCursor(0, 1);
     mylcd.print("A=OK B=Canc");
 }
+
+
+// --- Funzione per convertire da byte a esadecimali ---
+
+String bytesToHex(uint8_t* bytes, size_t len) {
+    String hexStr = "";
+    for (size_t i = 0; i < len; i++) {
+        if (bytes[i] < 0x10) hexStr += "0";
+        hexStr += String(bytes[i], HEX);
+    }
+    return hexStr;
+}
+
+
+// --- Funzione per inviare la chiave pubblica dell'accordo al server ---
+
+void inviaChiavePubblica() {
+    if (!client.connected()) {
+        client.stop();
+        delay(100);
+        if (!client.connect(serverAddress, port)) {
+            Serial.println("Connessione al server fallita!");
+            return;
+        }
+    }
+
+    String pubkeyHex = bytesToHex(masterPub, 32);
+
+    // Creiamo un semplice JSON da inviare in chiaro
+    String json = "{\"type\":\"pubkey\",\"value\":\"" + pubkeyHex + "\"}";
+
+    client.println(json); // invio in chiaro
+}
+
+
+// --- Funzione per ricevere la chiave pubblica dell'accordo dal server ---
+
+bool riceviChiaveServer(){
+    String json = client.readStringUntil('\n');
+        json.trim();
+
+    if (json.length() == 0) {
+        return false;
+    }
+
+    StaticJsonDocument<200> doc;
+    DeserializationError error = deserializeJson(doc, json);
+
+    if(error){
+        return false;
+    }
+    if (!doc.containsKey("type") || String(doc["type"]) != "pubkey") {
+        return false;
+    }
+
+    String serverPubHex = doc["value"];
+    if (serverPubHex.length() != 64) { // 32 byte * 2
+        return false;
+    }
+
+    // Converti da esadecimale a byte
+    for (int i = 0; i < 32; i++) {
+        serverPub[i] = strtol(serverPubHex.substring(i * 2, i * 2 + 2).c_str(), NULL, 16);
+    }
+
+    return true;
+}
+
 
 void setup() {
     Wire.begin();
@@ -377,13 +454,11 @@ void setup() {
     pinMode(LED_VERDE_PIN, OUTPUT);
     pinMode(LED_ROSSO_PIN, OUTPUT);
     pinMode(BUZZER_PIN, OUTPUT);
-
     Serial.begin(115200);
-    
-    // --- Inizializzazione Chiavi ---
-    aesWifi.setKey(AES_KEY, 16);    // Chiave AES per WiFi
+
     // La chiave ChaChaPoly viene impostata all'interno della funzione di decrittazione
-    
+    // La chiave dell'AES con il server viene generata tramite accordo ECDH
+
     // Display iniziale con delay
     delay(100);
     display_Attesa();
@@ -394,14 +469,14 @@ void setup() {
     delay(10);
     mylcd.setCursor(0,0);
     mylcd.print("Connessione WiFi");
-    
+
     int tentativi = 0;
     while (WiFi.status() != WL_CONNECTED && tentativi < 20) {
         delay(500);
         mylcd.print(".");
         tentativi++;
     }
-    
+
     if (WiFi.status() == WL_CONNECTED) {
         mylcd.clear();
         delay(10);
@@ -409,6 +484,29 @@ void setup() {
         mylcd.print("WiFi connessa!");
         delay(1000);
         display_Attesa();
+
+        //Accordo su chiavi Diffie-Hellman con curve ellittiche
+        Curve25519::dh1(masterPub, masterPriv);
+        inviaChiavePubblica();
+
+        if(riceviChiaveServer()){
+            uint8_t shared[32];
+            memcpy(shared, serverPub, 32);
+
+            if(!Curve25519::dh2(shared,masterPriv)){
+                //la chiave del server ricevuta e' invalida
+                while (true) {
+                    delay(1000); // loop infinito, Arduino resta fermo
+                }
+            }
+
+            memcpy(sharedSecret, shared, 32);
+
+            // Prendo i primi 16 byte come AES‑128 key
+            memcpy(aesKey, sharedSecret, 16);
+            aesWifi.setKey(aesKey, 16);
+        }
+
     } else {
         mylcd.clear();
         delay(10);
@@ -420,6 +518,7 @@ void setup() {
             delay(1000);
         }
     }
+
 }
 
 // --- Funzione per inviare JSON cifrato al server ---
@@ -435,14 +534,14 @@ void inviaAlServer(String tipo, String valore) {
     }
 
     StaticJsonDocument<200> doc;
-    doc["type"] = tipo;    
+    doc["type"] = tipo;
     doc["value"] = valore;
 
     String json_payload;
     serializeJson(doc, json_payload);
 
     String encrypted = encryptAES(json_payload);
-    
+
     if (encrypted.length() == 0) {
         Serial.println("Errore nella cifratura!");
         return;
@@ -460,14 +559,14 @@ void loop() {
         String encryptedResponse = client.readStringUntil('\n');
         Serial.print(encryptedResponse);
         encryptedResponse.trim();
-        
+
         if (encryptedResponse.length() > 0) {
             String decryptedResponse = decryptAES(encryptedResponse);
-            
+
             if (decryptedResponse.length() > 0) {
                 StaticJsonDocument<200> doc;
                 DeserializationError error = deserializeJson(doc, decryptedResponse);
-                
+
                 if (!error) {
                     String status = doc["status"];
                     if (status == "CARTA_VALIDA") {
@@ -506,7 +605,7 @@ void loop() {
         lastRequest = now;
         requestDataAndProcess(); // Chiama la nuova funzione ChaChaPoly
     }
-    
+
     // Piccola pausa per stabilizzare il loop
     delay(10);
 }
