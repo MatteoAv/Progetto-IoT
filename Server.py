@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from pymongo.mongo_client import MongoClient
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
-import hashlib
+import bcrypt
 from nacl.public import PrivateKey
 from nacl.bindings import crypto_scalarmult
 
@@ -116,34 +116,63 @@ def gestisci_client(conn, addr):
                     print(f"[SERVER] Errore decifratura/JSON: {e}")
                     continue
 
-                # identifica il tipo di messaggio
+                # Identifica il tipo di messaggio
                 tipo = msg.get("type")
                 valore = msg.get("value")
-                valore_hash = hashlib.sha256(valore.encode()).hexdigest() #calcolo l'hash del messaggio inviato in modo da confrontarlo con l'hash presente sul db
                 risposta = {}
 
                 # --- Gestione carta ---
                 if tipo == "card":
-                    utente_corrente = collection.find_one({"card_id": valore_hash}) # cerca l'utente nel DB tramite la carta
-                    if utente_corrente:
-                        risposta["status"] = "CARTA_VALIDA" # se lo trova setta lo stato a CARTA VALIDA
-                        print(f"Carta valida: {valore_hash}")
-                    else:
-                        utente_corrente = None
-                        risposta["status"] = "CARTA_NON_VALIDA" # altrimeni a CARTA NON VALIDA
-                        print(f"Carta non valida: {valore_hash}")
+                    utente_corrente = None
+                    
+                    # Cerca tutti gli utenti e verifica l'hash bcrypt per trovare corrispondenza
+                    for utente in collection.find():
+                        try:
+                            card_hash = utente["card_id"]
+                            # Se l'hash è salvato come stringa sul DB, lo converte in bytes
+                            if isinstance(card_hash, str):
+                                card_hash = card_hash.encode('utf-8')
+                            
+                            # Verifica se il valore ricevuto corrisponde all'hash bcrypt memorizzato
+                            if bcrypt.checkpw(valore.encode('utf-8'), card_hash):
+                                utente_corrente = utente                        # Imposta l'utente corrente
+                                risposta["status"] = "CARTA_VALIDA"             # Setta lo stato a CARTA VALIDA
+                                print(f"Carta valida per utente: {utente.get('nome', 'N/A')}")
+                                break                                           # Esce dal ciclo appena trova corrispondenza
+                        except Exception as e:
+                            print(f"Errore verifica carta per utente {utente.get('_id')}: {e}")
+                            continue
+                    
+                    # Se nessun utente è stato trovato
+                    if not utente_corrente:
+                        risposta["status"] = "CARTA_NON_VALIDA"                 # Setta lo stato a CARTA NON VALIDA
+                        print(f"Carta non valida: {valore}")
 
                 # --- Gestione PIN ---
                 elif tipo == "pin":
-                    if utente_corrente and valore_hash == utente_corrente["pin"]:   # confronta il pin ricevuto con quello nel DB associato all'utente
-                        risposta["status"] = "ACCESSO_CONCESSO"                     # se corretto setta lo stato ad ACCESSO CONCESSO
-                        risposta["nome"] = utente_corrente["nome"]
-                        risposta["cognome"] = utente_corrente["cognome"]
-                        risposta["saldo"] = str(utente_corrente["saldo"])
-                        print(f"PIN corretto per {utente_corrente['nome']} {utente_corrente['cognome']}")
+                    if utente_corrente:                                         # Verifica che ci sia un utente corrente (carta già validata)
+                        try:
+                            pin_hash = utente_corrente["pin"]
+                            # Se l'hash è salvato come stringa sul DB, lo converte in bytes
+                            if isinstance(pin_hash, str):
+                                pin_hash = pin_hash.encode('utf-8')
+                            
+                            # Confronta il PIN ricevuto con quello nel DB associato all'utente
+                            if bcrypt.checkpw(valore.encode('utf-8'), pin_hash):
+                                risposta["status"] = "ACCESSO_CONCESSO"         # Se corretto setta lo stato ad ACCESSO CONCESSO
+                                risposta["nome"] = utente_corrente["nome"]
+                                risposta["cognome"] = utente_corrente["cognome"]
+                                risposta["saldo"] = str(utente_corrente["saldo"])
+                                print(f"PIN corretto per {utente_corrente['nome']} {utente_corrente['cognome']}")
+                            else:
+                                risposta["status"] = "ACCESSO_NEGATO"           # Se sbagliato setta lo stato ad ACCESSO NEGATO
+                                print("PIN errato")
+                        except Exception as e:
+                            risposta["status"] = "ACCESSO_NEGATO"
+                            print(f"Errore verifica PIN: {e}")
                     else:
-                        risposta["status"] = "ACCESSO_NEGATO"           # se sbagliato setta lo stato ad ACCESSO NEGATO
-                        print("PIN errato o carta non valida")
+                        risposta["status"] = "ACCESSO_NEGATO"
+                        print("Nessuna carta valida inserita")
 
                 else:
                     risposta["status"] = "ERRORE"
