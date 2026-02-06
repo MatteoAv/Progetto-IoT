@@ -337,15 +337,15 @@ void display_Attesa() {
     digitalWrite(LED_ROSSO_PIN, LOW);
 }
 
-void display_AccessoConcesso(String nome, String cognome, String saldo) {
+void display_AccessoConcesso(String nome, String cognome) {
     digitalWrite(LED_VERDE_PIN, HIGH);
     digitalWrite(LED_ROSSO_PIN, LOW);
     mylcd.clear();
     delay(10);
     mylcd.setCursor(0, 0);
-    mylcd.print(nome + " " + cognome);
+    mylcd.print("Benvenuto");
     mylcd.setCursor(0, 1);
-    mylcd.print("Saldo: " + saldo + " EUR"); // Ho messo EUR invece di € per evitare problemi di caratteri su LCD
+    mylcd.print(nome + " " + cognome);
 }
 
 void display_AccessoNegato(String msg = "") {
@@ -451,6 +451,8 @@ bool riceviChiaveServer(){
 void setup() {
     Wire.begin();
     mylcd.begin(16, 2);
+
+    // LCD e PIN
     pinMode(LED_VERDE_PIN, OUTPUT);
     pinMode(LED_ROSSO_PIN, OUTPUT);
     pinMode(BUZZER_PIN, OUTPUT);
@@ -484,28 +486,7 @@ void setup() {
         mylcd.print("WiFi connessa!");
         delay(1000);
         display_Attesa();
-
-        //Accordo su chiavi Diffie-Hellman con curve ellittiche
-        Curve25519::dh1(masterPub, masterPriv);
-        inviaChiavePubblica();
-
-        if(riceviChiaveServer()){
-            uint8_t shared[32];
-            memcpy(shared, serverPub, 32);
-
-            if(!Curve25519::dh2(shared,masterPriv)){
-                //la chiave del server ricevuta e' invalida
-                while (true) {
-                    delay(1000); // loop infinito, Arduino resta fermo
-                }
-            }
-
-            memcpy(sharedSecret, shared, 32);
-
-            // Prendo i primi 16 byte come AES‑128 key
-            memcpy(aesKey, sharedSecret, 16);
-            aesWifi.setKey(aesKey, 16);
-        }
+        
 
     } else {
         mylcd.clear();
@@ -521,6 +502,35 @@ void setup() {
 
 }
 
+
+bool handshakeDH() {
+    Curve25519::dh1(masterPub, masterPriv);
+    inviaChiavePubblica();
+
+    unsigned long start = millis();
+    while (!client.available()) {
+        if (millis() - start > 3000) return false;
+    }
+
+    if (!riceviChiaveServer()) return false;
+
+    uint8_t shared[32];
+    memcpy(shared, serverPub, 32);
+
+    if (!Curve25519::dh2(shared, masterPriv)) return false;
+
+    memcpy(sharedSecret, shared, 32);
+    memcpy(aesKey, sharedSecret, 16);
+    aesWifi.setKey(aesKey, 16);
+
+    Serial.println("Handshake DH OK");
+    return true;
+}
+
+
+
+
+
 // --- Funzione per inviare JSON cifrato al server ---
 void inviaAlServer(String tipo, String valore) {
 
@@ -529,6 +539,12 @@ void inviaAlServer(String tipo, String valore) {
         delay(100);
         if (!client.connect(serverAddress, port)) {
             Serial.println("Connessione al server fallita!");
+            return;
+        }
+
+        if (!handshakeDH()) {
+            Serial.println("Handshake fallito!");
+            client.stop();
             return;
         }
     }
@@ -584,8 +600,7 @@ void loop() {
                         stato = ACCESSO_CONCESSO;
                         String nome = doc["nome"];
                         String cognome = doc["cognome"];
-                        String saldo = doc["saldo"];
-                        display_AccessoConcesso(nome, cognome, saldo);
+                        display_AccessoConcesso(nome, cognome);
                         suono_accesso_concesso();
                     } else if (status == "ACCESSO_NEGATO") {
                         display_AccessoNegato("PIN errato");
