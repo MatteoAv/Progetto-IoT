@@ -33,7 +33,7 @@ The system is designed around a master–slave embedded architecture with crypto
 
 SafeGate is built using two embedded boards:
 
-### Input Device (Slave)
+### Slave (Input Device)
 
 - Elegoo Mega (no WiFi capability)
 - Connected components:
@@ -45,7 +45,7 @@ It does not perform authentication or communicate directly with the server.
 
 ---
 
-### Control & Network Device (Master)
+### Master (Control & Network Device)
 
 - Arduino Uno R4 WiFi
 - Connected components:
