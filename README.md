@@ -7,6 +7,10 @@ The core objective of this project is not only access control, but the secure de
 
 ---
 
+## 🎥 Watch the Demo:
+
+[Click to watch the demo video]([https://www.youtube.com/watch?v=FNyESPgQyoM&autoplay=1&loop=1&playlist=FNyESPgQyoM](https://www.youtube.com/watch?v=GXtquoa2UFA))
+
 ## 🎯 Project Overview
 
 SafeGate implements a two-step authentication process:
