@@ -61,12 +61,6 @@ This board:
 
 ---
 
-## System Communication Model
-
-SafeGate uses two separate communication channels, each protected with different cryptographic mechanisms based on its threat model.
-
----
-
 ## Secure Communication Between Slave (Elegoo Mega) and Master (Arduino Uno R4 WiFi)
 
 ### Transport Layer
@@ -106,7 +100,7 @@ This ensures that even if an attacker physically accesses the I2C bus, the commu
 
 ---
 
-## Secure Communication Between Master and Server
+## Secure Communication Between Master (Arduino Uno R4 WiFi) and Server
 
 ### Transport Layer
 
