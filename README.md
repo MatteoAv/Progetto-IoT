@@ -111,8 +111,6 @@ Communication occurs over WiFi.
 
 Since WiFi traffic is exposed to remote interception risks, session-level cryptographic protection is required.
 
----
-
 ### 🗝️ Key Exchange: Elliptic Curve Diffie-Hellman (ECDH)
 
 Before transmitting any sensitive authentication data between the master and the server, for each session, a secure symmetric key is established using Elliptic Curve Diffie-Hellman (ECDH).
@@ -182,7 +180,7 @@ The server handles:
 - PIN verification  
 - Authentication response generation  
 
-## Security Design Rationale
+## 🔐 Security Design Rationale
 
 SafeGate applies layered security principles.
 
