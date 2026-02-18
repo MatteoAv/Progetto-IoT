@@ -62,7 +62,7 @@ This board:
 
 ## 🔐 Secure Communication Between Slave (Elegoo Mega) and Master (Arduino Uno R4 WiFi)
 
-### Transport Layer
+### 📡 Transport Layer
 
 Communication occurs via wired I²C serial connection.
 
