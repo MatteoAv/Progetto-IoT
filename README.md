@@ -190,7 +190,7 @@ SafeGate applies layered security principles.
 
 I²C communication is protected using ChaCha20-Poly1305 to secure local hardware communication against physical interception and tampering.
 
-### 🌐 Network Layer Protection
+### Network Layer Protection
 
 WiFi communication is protected using:
 
