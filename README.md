@@ -7,7 +7,7 @@ The core objective of this project is not only access control, but the secure de
 
 ---
 
-## Project Overview
+## 🎯 Project Overview
 
 SafeGate implements a two-step authentication process:
 
@@ -29,7 +29,7 @@ The system is designed around a master–slave embedded architecture with crypto
 
 ---
 
-## Hardware Architecture
+## 🖥️ Hardware Architecture
 
 SafeGate is built using two embedded boards:
 
@@ -61,7 +61,7 @@ This board:
 
 ---
 
-## Secure Communication Between Slave (Elegoo Mega) and Master (Arduino Uno R4 WiFi)
+## 🔐 Secure Communication Between Slave (Elegoo Mega) and Master (Arduino Uno R4 WiFi)
 
 ### Transport Layer
 
@@ -73,7 +73,7 @@ By default, I²C communication is unencrypted and vulnerable to:
 - Replay attacks  
 - Data tampering  
 
-### Applied Security Mechanism
+### 🛡️ Applied Security Mechanism
 
 To protect this channel, SafeGate uses:
 
@@ -85,7 +85,7 @@ This provides:
 - Integrity (tampering is detected)  
 - Authentication (invalid messages are rejected)  
 
-### Communication Process
+### ⚙️ Communication Process
 
 1. The slave collects RFID and PIN input.
 2. Before transmission, the message is:
@@ -100,7 +100,7 @@ This ensures that even if an attacker physically accesses the I2C bus, the commu
 
 ---
 
-## Secure Communication Between Master (Arduino Uno R4 WiFi) and Server
+## 🌐 Secure Communication Between Master (Arduino Uno R4 WiFi) and Server
 
 ### Transport Layer
 
@@ -110,7 +110,7 @@ Since WiFi traffic is exposed to remote interception risks, session-level crypto
 
 ---
 
-### Key Exchange: Elliptic Curve Diffie-Hellman (ECDH)
+### 🗝️ Key Exchange: Elliptic Curve Diffie-Hellman (ECDH)
 
 Before transmitting any sensitive authentication data between the master and the server, for each session, a secure symmetric key is established using Elliptic Curve Diffie-Hellman (ECDH).
 
@@ -128,7 +128,7 @@ This approach ensures:
 - Secure and efficient key establishment suitable for constrained devices like microcontrollers.
 
 
-### Symmetric Encryption: AES-128
+### 🔒 Symmetric Encryption: AES-128
 
 After the shared secret is derived:
 
@@ -166,7 +166,7 @@ The complete secure process is:
 
 ---
 
-## Database Design (MongoDB)
+## 🗄️ Database Design (MongoDB)
 
 The MongoDB database stores user credentials using a simple structure:
 
@@ -187,7 +187,7 @@ SafeGate applies layered security principles.
 
 I²C communication is protected using ChaCha20-Poly1305 to secure local hardware communication against physical interception and tampering.
 
-### Network Layer Protection
+### 🌐 Network Layer Protection
 
 WiFi communication is protected using:
 
