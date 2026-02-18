@@ -43,7 +43,6 @@ SafeGate is built using two embedded boards:
 This board is responsible only for collecting user input.  
 It does not perform authentication or communicate directly with the server.
 
----
 
 ### Master (Control & Network Device)
 
