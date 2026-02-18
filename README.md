@@ -144,7 +144,7 @@ Although ECB does not provide semantic security for large structured data, in th
 
 ---
 
-## Authentication Flow
+## 🏃‍♂️ Authentication Flow
 
 The complete secure process is:
 
@@ -201,7 +201,7 @@ This layered approach ensures:
 
 ---
 
-## Threat Model Considerations
+## ⚠️ Threat Model Considerations
 
 SafeGate mitigates:
 
