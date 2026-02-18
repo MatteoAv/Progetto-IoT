@@ -178,7 +178,9 @@ The server handles:
 
 - Card existence validation  
 - PIN verification  
-- Authentication response generation  
+- Authentication response generation
+
+---
 
 ## 🔐 Security Design Rationale
 
